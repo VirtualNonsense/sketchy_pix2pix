@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/xtask",
+    "crates/sketchy_pix2pix",
+]
