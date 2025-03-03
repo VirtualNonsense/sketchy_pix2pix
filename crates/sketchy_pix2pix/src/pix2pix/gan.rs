@@ -171,7 +171,7 @@ pub struct TrainingConfig {
     pub num_workers: usize,
     #[config(default = 42)]
     pub seed: u64,
-    #[config(default = 1.0e-4)]
+    #[config(default = 0.0002)]
     pub learning_rate: f64,
 }
 

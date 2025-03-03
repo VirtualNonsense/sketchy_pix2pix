@@ -12,7 +12,7 @@ fn main() {
     train::<MyAutodiffBackend>(
         artifact_dir,
         TrainingConfig::new(Pix2PixModelConfig::new(Pix2PixDescriminatorConfig::new(), Pix2PixGeneratorConfig::new()), 
-        AdamConfig::new()),
+        AdamConfig::new().with_beta_2(0.5)),
         device.clone(),
     );
 }
