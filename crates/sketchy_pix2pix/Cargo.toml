@@ -9,10 +9,10 @@ path = "src/bin/pix2pix_training.rs"
 
 [dependencies]
 burn = { version = "0.16.0", features = ["wgpu", "dataset", "train"] }
-image = "0.25.5"
+image = "0.25"
 log = "0.4"
 ron = "0.8"
 serde ={ version = "1.0", features = ["derive"]}
-thiserror = "2.0.11"
-walkdir = "2.5.0"
+thiserror = "2.0"
+walkdir = "2.5"
 rand = "0.9"
