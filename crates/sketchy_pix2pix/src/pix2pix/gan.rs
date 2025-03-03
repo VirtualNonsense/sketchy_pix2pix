@@ -45,10 +45,19 @@ pub struct Pix2PixModel<B: Backend> {
 
 #[derive(Debug)]
 pub struct GanOutput<B: Backend> {
+    /// real sketches
+    train_sketches: Tensor<B, 4>,
+    /// generated sketches
+    fake_sketches: Tensor<B, 4>,
+    /// discriminator result of real sketches
     real_sketch_output: Tensor<B, 4>,
+    /// discriminator result of fake sketches
     fake_sketch_output: Tensor<B, 4>,
+    /// loss of discriminator
     loss_real: Tensor<B, 1>,
+    /// loss of generator
     loss_fake: Tensor<B, 1>,
+    /// combined loss
     loss: Tensor<B, 1>,
 }
 
@@ -57,12 +66,16 @@ impl<B: Backend> ItemLazy for GanOutput<B> {
 
     fn sync(self) -> Self::ItemSync {
         let [
+            train_sketches,
+            fake_sketches,
             real_sketch_output,
             fake_sketch_output,
             loss_real,
             loss_fake,
             loss,
         ] = Transaction::default()
+            .register(self.train_sketches)
+            .register(self.fake_sketches)
             .register(self.real_sketch_output)
             .register(self.fake_sketch_output)
             .register(self.loss_real)
@@ -75,6 +88,8 @@ impl<B: Backend> ItemLazy for GanOutput<B> {
         let device = &Default::default();
 
         GanOutput {
+            train_sketches: Tensor::from_data(train_sketches, device),
+            fake_sketches: Tensor::from_data(fake_sketches, device),
             real_sketch_output: Tensor::from_data(real_sketch_output, device),
             fake_sketch_output: Tensor::from_data(fake_sketch_output, device),
             loss_real: Tensor::from_data(loss_real, device),
@@ -86,14 +101,14 @@ impl<B: Backend> ItemLazy for GanOutput<B> {
 
 impl<B: Backend> Pix2PixModel<B> {
     pub fn forward_training(&self, item: SketchyBatch<B>) -> GanOutput<B> {
-        let generated_images = self.generator.forward(item.photos.clone());
+        let generated_sketches = self.generator.forward(item.photos.clone());
 
         let real_result = self
             .discriminator
             .forward(item.photos.clone(), item.sketches.clone());
         let fake_result = self
             .discriminator
-            .forward(generated_images.clone(), item.sketches.clone());
+            .forward(generated_sketches.clone(), item.sketches.clone());
         // Erstelle Ziel-Tensoren: echte Bilder sollen als 1 klassifiziert werden, gefälschte als 0
         let real_labels = Tensor::ones_like(&real_result);
         let fake_labels = Tensor::zeros_like(&fake_result);
@@ -108,6 +123,8 @@ impl<B: Backend> Pix2PixModel<B> {
             nn::loss::Reduction::Auto,
         );
         let output = GanOutput {
+            train_sketches: item.sketches, 
+            fake_sketches: generated_sketches, 
             real_sketch_output: real_result,
             fake_sketch_output: fake_result,
             loss_real: loss_real.clone(),
