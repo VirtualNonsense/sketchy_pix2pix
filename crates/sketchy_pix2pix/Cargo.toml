@@ -3,6 +3,10 @@ name = "sketchy_pix2pix"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "train_pix2pix"
+path = "src/bin/pix2pix_training.rs"
+
 [dependencies]
 burn = { version = "0.16.0", features = ["wgpu", "dataset", "train"] }
 image = "0.25.5"

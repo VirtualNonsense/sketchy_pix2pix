@@ -18,6 +18,6 @@ cargo xtask extract-sketchy-db
 # training
 Run the training
 ```bash
-cargo run --bin sketchy_pix2pix --release
+cargo.exe run --package sketchy_pix2pix --bin train_pix2pix --release
 ``` 
 
