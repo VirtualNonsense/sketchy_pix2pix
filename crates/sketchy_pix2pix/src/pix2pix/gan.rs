@@ -46,12 +46,16 @@ pub struct Pix2PixModel<B: Backend> {
 #[derive(Debug)]
 pub struct GanOutput<B: Backend> {
     /// real sketches
+    /// dim [N, C, 256, 256]
     train_sketches: Tensor<B, 4>,
     /// generated sketches
+    /// dim [N, C, 256, 256]
     fake_sketches: Tensor<B, 4>,
     /// discriminator result of real sketches
+    /// dim [N, 1, 16, 16]
     real_sketch_output: Tensor<B, 4>,
     /// discriminator result of fake sketches
+    /// dim [N, 1, 16, 16]
     fake_sketch_output: Tensor<B, 4>,
     /// loss of discriminator
     loss_real: Tensor<B, 1>,
