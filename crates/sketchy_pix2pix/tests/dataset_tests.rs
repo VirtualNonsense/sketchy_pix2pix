@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod end_to_end_tests {
-    use std::{fs, path::Path, process::exit};
+    use std::{fs, path::Path};
 
     use burn::data::dataset::Dataset;
     use sketchy_pix2pix::sketchy_database::sketchy_dataset::{

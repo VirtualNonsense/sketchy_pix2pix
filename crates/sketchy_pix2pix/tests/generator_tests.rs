@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod generator {
     use std::{
-        path::{Path, PathBuf},
+        path::PathBuf,
         str::FromStr,
     };
 
@@ -20,7 +20,7 @@ mod generator {
 
         let device = burn::backend::wgpu::WgpuDevice::default();
 
-        let generator: Pix2PixGenerator<MyBackend> =
+        let _generator: Pix2PixGenerator<MyBackend> =
             Pix2PixGeneratorConfig::new().init(&device);
     }
 

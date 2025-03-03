@@ -1,11 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use std::{path::{Path, PathBuf}, str::FromStr};
+    use std::{path::PathBuf, str::FromStr};
 
     use burn::{backend::Wgpu, data::dataloader::batcher::Batcher, tensor::Shape};
     use sketchy_pix2pix::sketchy_database::{sketchy_batcher::SketchyBatcher, sketchy_dataset::{SketchyClass, SketchyItem}};
-
-    use super::*;
 
     #[test]
     fn test_shape() {

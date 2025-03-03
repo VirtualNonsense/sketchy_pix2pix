@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod discriminator {
     use std::{
-        path::{Path, PathBuf},
+        path::PathBuf,
         str::FromStr,
     };
 
@@ -20,7 +20,7 @@ mod discriminator {
 
         let device = burn::backend::wgpu::WgpuDevice::default();
 
-        let generator: Pix2PixDiscriminator<MyBackend> =
+        let _generator: Pix2PixDiscriminator<MyBackend> =
         Pix2PixDescriminatorConfig::new().init(&device);
     }
 
