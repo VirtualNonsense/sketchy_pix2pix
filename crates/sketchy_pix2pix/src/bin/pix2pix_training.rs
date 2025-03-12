@@ -1,6 +1,6 @@
 
 use burn::{backend::{Autodiff, Wgpu}, optim::AdamConfig};
-use sketchy_pix2pix::pix2pix::{discriminator::Pix2PixDescriminatorConfig, generator::Pix2PixGeneratorConfig, gan::{train, Pix2PixModelConfig, TrainingConfig}};
+use sketchy_pix2pix::pix2pix::{discriminator::Pix2PixDescriminatorConfig, gan::{run_custom_loop, run_trainer, Pix2PixModelConfig, TrainingConfig}, generator::Pix2PixGeneratorConfig};
 
 
 fn main() {
@@ -9,10 +9,11 @@ fn main() {
 
     let device = burn::backend::wgpu::WgpuDevice::default();
     let artifact_dir = "./tmp";
-    train::<MyAutodiffBackend>(
+    run_custom_loop::<MyAutodiffBackend>(
         artifact_dir,
         TrainingConfig::new(Pix2PixModelConfig::new(Pix2PixDescriminatorConfig::new(), Pix2PixGeneratorConfig::new()), 
-        AdamConfig::new().with_beta_2(0.5)),
+        AdamConfig::new().with_beta_1(0.5),
+        AdamConfig::new().with_beta_1(0.5)),
         device.clone(),
     );
 }

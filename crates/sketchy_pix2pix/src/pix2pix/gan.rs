@@ -1,10 +1,10 @@
 use std::path::Path;
 
-
 use burn::{
     data::dataloader::DataLoaderBuilder,
+    module::AutodiffModule,
     nn::loss::MseLoss,
-    optim::AdamConfig,
+    optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
     record::CompactRecorder,
     tensor::{backend::AutodiffBackend, Tensor, Transaction},
@@ -13,7 +13,10 @@ use burn::{
     },
 };
 
-use crate::sketchy_database::{sketchy_batcher::{SketchyBatch, SketchyBatcher}, sketchy_dataset::{PhotoAugmentation, SketchAugmentation, SketchyDataset}};
+use crate::sketchy_database::{
+    sketchy_batcher::{SketchyBatch, SketchyBatcher},
+    sketchy_dataset::{PhotoAugmentation, SketchAugmentation, SketchyDataset},
+};
 
 use super::{
     discriminator::{Pix2PixDescriminatorConfig, Pix2PixDiscriminator},
@@ -58,11 +61,9 @@ pub struct GanOutput<B: Backend> {
     /// dim [N, 1, 16, 16]
     fake_sketch_output: Tensor<B, 4>,
     /// loss of discriminator
-    loss_real: Tensor<B, 1>,
+    loss_discriminator: Tensor<B, 1>,
     /// loss of generator
-    loss_fake: Tensor<B, 1>,
-    /// combined loss
-    loss: Tensor<B, 1>,
+    loss_generator: Tensor<B, 1>,
 }
 
 impl<B: Backend> ItemLazy for GanOutput<B> {
@@ -74,17 +75,15 @@ impl<B: Backend> ItemLazy for GanOutput<B> {
             fake_sketches,
             real_sketch_output,
             fake_sketch_output,
-            loss_real,
-            loss_fake,
-            loss,
+            loss_discriminator,
+            loss_generator,
         ] = Transaction::default()
             .register(self.train_sketches)
             .register(self.fake_sketches)
             .register(self.real_sketch_output)
             .register(self.fake_sketch_output)
-            .register(self.loss_real)
-            .register(self.loss_fake)
-            .register(self.loss)
+            .register(self.loss_discriminator)
+            .register(self.loss_generator)
             .execute()
             .try_into()
             .expect("Correct amount of tensor data");
@@ -96,9 +95,8 @@ impl<B: Backend> ItemLazy for GanOutput<B> {
             fake_sketches: Tensor::from_data(fake_sketches, device),
             real_sketch_output: Tensor::from_data(real_sketch_output, device),
             fake_sketch_output: Tensor::from_data(fake_sketch_output, device),
-            loss_real: Tensor::from_data(loss_real, device),
-            loss_fake: Tensor::from_data(loss_fake, device),
-            loss: Tensor::from_data(loss, device),
+            loss_discriminator: Tensor::from_data(loss_discriminator, device),
+            loss_generator: Tensor::from_data(loss_generator, device),
         }
     }
 }
@@ -127,13 +125,12 @@ impl<B: Backend> Pix2PixModel<B> {
             nn::loss::Reduction::Auto,
         );
         let output = GanOutput {
-            train_sketches: item.sketches, 
-            fake_sketches: generated_sketches, 
+            train_sketches: item.sketches,
+            fake_sketches: generated_sketches,
             real_sketch_output: real_result,
             fake_sketch_output: fake_result,
-            loss_real: loss_real.clone(),
-            loss_fake: loss_fake.clone(),
-            loss: (loss_real + loss_fake) / 2.0,
+            loss_discriminator: loss_real.clone(),
+            loss_generator: (loss_real + loss_fake) / 2.0,
         };
         output
     }
@@ -143,7 +140,7 @@ impl<B: AutodiffBackend> TrainStep<SketchyBatch<B>, GanOutput<B>> for Pix2PixMod
     fn step(&self, item: SketchyBatch<B>) -> TrainOutput<GanOutput<B>> {
         let output = self.forward_training(item);
 
-        TrainOutput::new(self, output.loss.backward(), output)
+        TrainOutput::new(self, output.loss_generator.backward(), output)
     }
 }
 
@@ -153,26 +150,31 @@ impl<B: Backend> ValidStep<SketchyBatch<B>, GanOutput<B>> for Pix2PixModel<B> {
     }
 }
 
-impl<B: Backend> Adaptor<LossInput<B>> for GanOutput<B>{
+impl<B: Backend> Adaptor<LossInput<B>> for GanOutput<B> {
     fn adapt(&self) -> LossInput<B> {
-        LossInput::new(self.loss.clone())
+        LossInput::new(self.loss_discriminator.clone())
     }
 }
 
 #[derive(Config)]
 pub struct TrainingConfig {
     pub model: Pix2PixModelConfig,
-    pub optimizer: AdamConfig,
+    pub optimizer_discriminator: AdamConfig,
+    pub optimizer_generator: AdamConfig,
     #[config(default = 10)]
     pub num_epochs: usize,
     #[config(default = 4)]
     pub batch_size: usize,
-    #[config(default = 4)]
+    #[config(default = 10)]
     pub num_workers: usize,
     #[config(default = 42)]
     pub seed: u64,
     #[config(default = 0.0002)]
     pub learning_rate: f64,
+    #[config(default = 2)]
+    pub mini_batch_discriminator: usize,
+    #[config(default = 2)]
+    pub mini_batch_generator: usize,
 }
 
 fn create_artifact_dir(artifact_dir: &str) {
@@ -181,7 +183,11 @@ fn create_artifact_dir(artifact_dir: &str) {
     std::fs::create_dir_all(artifact_dir).ok();
 }
 
-pub fn train<B: AutodiffBackend>(artifact_dir: &str, config: TrainingConfig, device: B::Device) {
+pub fn run_trainer<B: AutodiffBackend>(
+    artifact_dir: &str,
+    config: TrainingConfig,
+    device: B::Device,
+) {
     create_artifact_dir(artifact_dir);
     config
         .save(format!("{artifact_dir}/config.json"))
@@ -201,7 +207,8 @@ pub fn train<B: AutodiffBackend>(artifact_dir: &str, config: TrainingConfig, dev
         sketch_path,
         PhotoAugmentation::ScaledAndCentered,
         SketchAugmentation::ScaledAndCentered,
-    ).expect("");
+    )
+    .expect("");
 
     let (train, valid) = data.split(0.8);
 
@@ -228,7 +235,7 @@ pub fn train<B: AutodiffBackend>(artifact_dir: &str, config: TrainingConfig, dev
         .summary()
         .build(
             config.model.init::<B>(&device),
-            config.optimizer.init(),
+            config.optimizer_discriminator.init(),
             config.learning_rate,
         );
 
@@ -239,4 +246,80 @@ pub fn train<B: AutodiffBackend>(artifact_dir: &str, config: TrainingConfig, dev
         .expect("Trained model should be saved successfully");
 }
 
+pub fn run_custom_loop<B: AutodiffBackend>(
+    artifact_dir: &str,
+    config: TrainingConfig,
+    device: B::Device,
+) {
+    create_artifact_dir(artifact_dir);
+    config
+        .save(format!("{artifact_dir}/config.json"))
+        .expect("Config should be saved successfully");
 
+    B::seed(config.seed);
+
+    let batcher_train = SketchyBatcher::<B>::new(device.clone());
+    let batcher_valid = SketchyBatcher::<B::InnerBackend>::new(device.clone());
+
+    let photo_path = Path::new("./data/sketchydb_256x256/256x256/photo/");
+
+    let sketch_path = Path::new("./data/sketchydb_256x256/256x256/sketch/");
+
+    let mut model = config.model.init::<B>(&device);
+
+    let data = SketchyDataset::new(
+        photo_path,
+        sketch_path,
+        PhotoAugmentation::ScaledAndCentered,
+        SketchAugmentation::ScaledAndCentered,
+    )
+    .expect("");
+
+    let (train, valid) = data.split(0.8);
+
+    let mut opt_discriminator = config.optimizer_discriminator.init();
+    let mut opt_generator = config.optimizer_generator.init();
+
+    let dataloader_train = DataLoaderBuilder::new(batcher_train)
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(train);
+
+    let dataloader_test = DataLoaderBuilder::new(batcher_valid)
+        .batch_size(config.batch_size)
+        .shuffle(config.seed)
+        .num_workers(config.num_workers)
+        .build(valid);
+
+    // Iterate over our training and validation loop for X epochs.
+    for epoch in 1..config.num_epochs + 1 {
+        // Implement our training loop.
+        for (_iteration, batch) in dataloader_train.iter().enumerate() {
+            let output = model.forward_training(batch);
+
+            let grad_d = output.loss_discriminator.clone().backward();
+            let grad_d = GradientsParams::from_grads(grad_d, &model.discriminator);
+            let grad_g = output.loss_generator.clone().backward();
+            let grad_g = GradientsParams::from_grads(grad_g, &model.generator);
+
+
+            model.discriminator = opt_discriminator.step(config.learning_rate, model.discriminator, grad_d);
+            model.generator = opt_generator.step(config.learning_rate, model.generator, grad_g);
+        }
+
+        // Get the model without autodiff.
+        let model_valid = model.valid();
+
+        // Implement our validation loop.
+        for (iteration, batch) in dataloader_test.iter().enumerate() {
+            let output = model_valid.forward_training(batch); 
+            println!(
+                "[Valid - Epoch {} - Iteration {}] generator Loss {} ",
+                epoch,
+                iteration,
+                output.loss_generator
+            );
+        }
+    }
+}
