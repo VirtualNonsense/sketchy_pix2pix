@@ -1,18 +1,19 @@
 use std::path::Path;
 
 use burn::{
-    data::dataloader::DataLoaderBuilder,
+    data::{dataloader::DataLoaderBuilder, dataset::Dataset},
     module::AutodiffModule,
     nn::loss::MseLoss,
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
     record::CompactRecorder,
-    tensor::{Tensor, Transaction, backend::AutodiffBackend},
+    tensor::{backend::AutodiffBackend, Tensor, Transaction},
     train::{
-        LearnerBuilder, TrainOutput, TrainStep, ValidStep,
-        metric::{Adaptor, ItemLazy, LossInput, LossMetric},
+        metric::{Adaptor, ItemLazy, LossInput, LossMetric}, LearnerBuilder, TrainOutput, TrainStep, ValidStep
     },
 };
+
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use crate::sketchy_database::{
     sketchy_batcher::{SketchyBatch, SketchyBatcher},
@@ -278,6 +279,9 @@ pub fn run_custom_loop<B: AutodiffBackend>(
 
     let (train, valid) = data.split(0.8);
 
+    let train_size = train.len();
+    let valid_size = valid.len();
+
     let mut opt_discriminator = config.optimizer_discriminator.init();
     let mut opt_generator = config.optimizer_generator.init();
 
@@ -292,8 +296,27 @@ pub fn run_custom_loop<B: AutodiffBackend>(
         .shuffle(config.seed)
         .num_workers(config.num_workers)
         .build(valid);
+
+    let m = MultiProgress::new();
+    let sty = ProgressStyle::with_template(
+        "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+    )
+    .unwrap()
+    .progress_chars("##-");
+    let epoch_bar = m.add(ProgressBar::new(config.num_epochs as u64));
+    epoch_bar.set_style(sty.clone());
+    epoch_bar.set_message("Epochs");
+    
+    
     // Iterate over our training and validation loop for X epochs.
-    for epoch in 1..config.num_epochs + 1 {
+    for _epoch in 1..config.num_epochs + 1 {
+        epoch_bar.inc(1);
+
+        let training_bar = m.add(ProgressBar::new(train_size as u64));
+        training_bar.set_style(sty.clone());
+        training_bar.set_message("Training:");
+
+
         // Implement our training loop.
         for (_iteration, batch) in dataloader_train.iter().enumerate() {
             let output = model.forward_training(batch);
@@ -306,18 +329,22 @@ pub fn run_custom_loop<B: AutodiffBackend>(
             model.discriminator =
                 opt_discriminator.step(config.learning_rate, model.discriminator, grad_d);
             model.generator = opt_generator.step(config.learning_rate, model.generator, grad_g);
+            training_bar.set_message(format!("Training - gen loss: {}, dis loss: {}",  output.loss_generator.mean().into_scalar(), output.loss_discriminator.mean().into_scalar()));
+            training_bar.inc(config.batch_size as u64);
         }
-
+        m.remove(&training_bar);
         // Get the model without autodiff.
         let model_valid = model.valid();
-
+        
+        let valid_bar = m.add(ProgressBar::new(valid_size as u64));
+        valid_bar.set_style(sty.clone());
+        valid_bar.set_message("Valid Progress");
         // Implement our validation loop.
-        for (iteration, batch) in dataloader_test.iter().enumerate() {
+        for (_iteration, batch) in dataloader_test.iter().enumerate() {
             let output = model_valid.forward_training(batch);
-            println!(
-                "[Valid - Epoch {} - Iteration {}] generator Loss {} ",
-                epoch, iteration, output.loss_generator
-            );
+            valid_bar.set_message(format!("Valid - gen loss: {}, dis loss: {}",  output.loss_generator.mean().into_scalar(), output.loss_discriminator.mean().into_scalar()));
+            valid_bar.inc(config.batch_size as u64);
         }
+        m.remove(&valid_bar);
     }
 }
