@@ -7,9 +7,10 @@ use burn::{
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
     record::CompactRecorder,
-    tensor::{backend::AutodiffBackend, Tensor, Transaction},
+    tensor::{Tensor, Transaction, backend::AutodiffBackend},
     train::{
-        metric::{Adaptor, ItemLazy, LossInput, LossMetric}, LearnerBuilder, TrainOutput, TrainStep, ValidStep
+        LearnerBuilder, TrainOutput, TrainStep, ValidStep,
+        metric::{Adaptor, ItemLazy, LossInput, LossMetric},
     },
 };
 
@@ -291,7 +292,6 @@ pub fn run_custom_loop<B: AutodiffBackend>(
         .shuffle(config.seed)
         .num_workers(config.num_workers)
         .build(valid);
-
     // Iterate over our training and validation loop for X epochs.
     for epoch in 1..config.num_epochs + 1 {
         // Implement our training loop.
@@ -303,8 +303,8 @@ pub fn run_custom_loop<B: AutodiffBackend>(
             let grad_g = output.loss_generator.clone().backward();
             let grad_g = GradientsParams::from_grads(grad_g, &model.generator);
 
-
-            model.discriminator = opt_discriminator.step(config.learning_rate, model.discriminator, grad_d);
+            model.discriminator =
+                opt_discriminator.step(config.learning_rate, model.discriminator, grad_d);
             model.generator = opt_generator.step(config.learning_rate, model.generator, grad_g);
         }
 
@@ -313,12 +313,10 @@ pub fn run_custom_loop<B: AutodiffBackend>(
 
         // Implement our validation loop.
         for (iteration, batch) in dataloader_test.iter().enumerate() {
-            let output = model_valid.forward_training(batch); 
+            let output = model_valid.forward_training(batch);
             println!(
                 "[Valid - Epoch {} - Iteration {}] generator Loss {} ",
-                epoch,
-                iteration,
-                output.loss_generator
+                epoch, iteration, output.loss_generator
             );
         }
     }

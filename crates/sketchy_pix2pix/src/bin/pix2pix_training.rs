@@ -1,6 +1,6 @@
 
 use burn::{backend::{Autodiff, Wgpu}, optim::AdamConfig};
-use sketchy_pix2pix::pix2pix::{discriminator::Pix2PixDescriminatorConfig, gan::{run_custom_loop, run_trainer, Pix2PixModelConfig, TrainingConfig}, generator::Pix2PixGeneratorConfig};
+use sketchy_pix2pix::pix2pix::{discriminator::Pix2PixDescriminatorConfig, gan::{run_custom_loop, Pix2PixModelConfig, TrainingConfig}, generator::Pix2PixGeneratorConfig};
 
 
 fn main() {
