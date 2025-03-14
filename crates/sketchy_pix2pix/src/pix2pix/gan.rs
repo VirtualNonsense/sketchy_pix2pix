@@ -131,7 +131,7 @@ impl<B: Backend> Pix2PixModel<B> {
             real_sketch_output: real_result,
             fake_sketch_output: fake_result,
             loss_discriminator: loss_real.clone(),
-            loss_generator: (loss_real + loss_fake) / 2.0,
+            loss_generator: (loss_real.detach() + loss_fake) / 2.0,
         };
         output
     }
