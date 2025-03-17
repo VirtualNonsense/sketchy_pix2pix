@@ -6,13 +6,14 @@ use burn::{
     nn::loss::MseLoss,
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
-    tensor::{backend::AutodiffBackend, Tensor, Transaction},
+    tensor::{backend::AutodiffBackend, cast::ToElement, Tensor, Transaction},
     train::{
         metric::{Adaptor, ItemLazy, LossInput}, TrainOutput, TrainStep, ValidStep
     },
 };
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+use rerun::{external::ndarray, RecordingStream};
 
 use crate::sketchy_database::{
     sketchy_batcher::{SketchyBatch, SketchyBatcher},
@@ -185,11 +186,28 @@ fn create_artifact_dir(artifact_dir: &str) {
 }
 
 
+fn burn_tensor4_to_rrtensor4<B: Backend>(tensor: Tensor<B, 4>) -> Result<rerun::Tensor, Box<dyn std::error::Error>>{
+    let tensor_data = tensor.to_data();
+    let shape: [usize; 4] = tensor_data.shape.clone().try_into().expect("failed to unpack shape");
+    let tensor_vec = tensor_data.into_vec().expect("failed to convert tensor data to vec");
+
+    fn get_val(data: &Vec<f32>, data_shape: &[usize; 4], n: usize, c: usize, h: usize, w: usize) -> f32{
+        let index = n * data_shape[1]* data_shape[2]* data_shape[3] + c * data_shape[2] * data_shape[3] + h * data_shape[3] + w;
+        data[index]
+    }
+    
+    let ndtensor = ndarray::Array4::<f32>::from_shape_fn(shape, |(n, c, h, w )|{
+        get_val(&tensor_vec, &shape, n, c, h, w)
+    });
+    Ok(rerun::Tensor::try_from(ndtensor)?.with_dim_names(["batch", "color", "height", "width"]))
+}  
+
 
 pub fn train_gan<B: AutodiffBackend>(
     artifact_dir: &str,
     config: TrainingConfig,
     device: B::Device,
+    log: RecordingStream,
 ) {
     create_artifact_dir(artifact_dir);
     config
@@ -257,6 +275,8 @@ pub fn train_gan<B: AutodiffBackend>(
 
         // Implement our training loop.
         for (_iteration, batch) in dataloader_train.iter().enumerate() {
+            let photos = batch.photos.clone();
+
             let output = model.forward_training(batch);
 
             let grad_d = output.loss_discriminator.clone().backward();
@@ -267,7 +287,25 @@ pub fn train_gan<B: AutodiffBackend>(
             model.discriminator =
                 opt_discriminator.step(config.learning_rate, model.discriminator, grad_d);
             model.generator = opt_generator.step(config.learning_rate, model.generator, grad_g);
-            training_bar.set_message(format!("Training - gen loss: {}, dis loss: {}",  output.loss_generator.mean().into_scalar(), output.loss_discriminator.mean().into_scalar()));
+            if let Ok(ten) = burn_tensor4_to_rrtensor4(photos){
+                let _ = log.log("input_images", &ten);
+            }
+
+            if let Ok(ten) = burn_tensor4_to_rrtensor4(output.train_sketches){
+                let _ = log.log("real_sketches", &ten);
+            }
+
+            if let Ok(ten) = burn_tensor4_to_rrtensor4(output.fake_sketches){
+                let _ = log.log("generated_sketches", &ten);
+            }
+            let gen_los = output.loss_generator.mean().into_scalar().to_f64();
+            let dis_los = output.loss_discriminator.mean().into_scalar().to_f64();
+            
+            let _ = log.log("generator_loss", &rerun::Scalar::new(gen_los));
+            let _ = log.log("discriminator_loss", &rerun::Scalar::new(dis_los));
+
+
+            training_bar.set_message(format!("Training - gen loss: {:3e}, dis loss: {:3e}",  gen_los, dis_los));
             training_bar.inc(config.batch_size as u64);
         }
         m.remove(&training_bar);
