@@ -6,10 +6,9 @@ use burn::{
     nn::loss::MseLoss,
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
-    record::CompactRecorder,
     tensor::{backend::AutodiffBackend, Tensor, Transaction},
     train::{
-        metric::{Adaptor, ItemLazy, LossInput, LossMetric}, LearnerBuilder, TrainOutput, TrainStep, ValidStep
+        metric::{Adaptor, ItemLazy, LossInput}, TrainOutput, TrainStep, ValidStep
     },
 };
 
