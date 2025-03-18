@@ -15,9 +15,18 @@ Extract the dataset
 cargo xtask extract-sketchy-db
 ``` 
 
-# training
-Run the training
-```bash
-cargo.exe run --package sketchy_pix2pix --bin train_pix2pix --release
-``` 
+Install [rerun](https://rerun.io) to see intermediate results and some nice graphs.
+```
+cargo binstall rerun-cli
+```
 
+# training
+- Start rerun
+- Run the training
+    ```bash
+    cargo run --package sketchy_pix2pix --bin train_pix2pix --release
+    ``` 
+
+## troubleshooting
+You may encounter this [error message](https://github.com/rerun-io/rerun/issues/9159) due to an issue in one of the dependencies of rerun.
+For me it worked to exclude xtask from the [workspace](./cargo.toml#L5) and run ```cargo update chrono --precise 0.4.34```
