@@ -3,7 +3,7 @@ use std::path::Path;
 use burn::{
     data::{dataloader::DataLoaderBuilder, dataset::Dataset},
     module::AutodiffModule,
-    nn::loss::MseLoss,
+    nn::loss::{BinaryCrossEntropyLoss, BinaryCrossEntropyLossConfig, MseLoss},
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
     tensor::{backend::AutodiffBackend, cast::ToElement, Tensor, Transaction},
@@ -13,7 +13,7 @@ use burn::{
 };
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rerun::{external::ndarray, RecordingStream};
+use rerun::{RecordingStream, external::ndarray};
 
 use crate::sketchy_database::{
     sketchy_batcher::{SketchyBatch, SketchyBatcher},
@@ -37,6 +37,7 @@ impl Pix2PixModelConfig {
             discriminator: self.discriminator_config.init(device),
             generator: self.generator_config.init(device),
             mse_loss: MseLoss::new(),
+            bce_loss: BinaryCrossEntropyLossConfig::new().init(device),
         }
     }
 }
@@ -46,6 +47,7 @@ pub struct Pix2PixModel<B: Backend> {
     discriminator: Pix2PixDiscriminator<B>,
     generator: Pix2PixGenerator<B>,
     mse_loss: MseLoss,
+    bce_loss: BinaryCrossEntropyLoss<B>,
 }
 
 #[derive(Debug)]
@@ -114,27 +116,34 @@ impl<B: Backend> Pix2PixModel<B> {
             .discriminator
             .forward(generated_sketches.clone(), item.sketches.clone());
         // Erstelle Ziel-Tensoren: echte Bilder sollen als 1 klassifiziert werden, gefälschte als 0
-        let real_labels = Tensor::ones_like(&real_result);
-        let fake_labels = Tensor::zeros_like(&fake_result);
-        let loss_real = self.mse_loss.forward(
+        // let true_labels: Tensor<B, 4, Int> = Tensor::ones(real_result.shape(), &real_result.device());
+        // let loss_d_real = self.bce_loss.forward(
+        //     real_result.clone(),
+        //     true_labels.clone(),
+        // );
+        let true_labels = Tensor::ones_like(&real_result);
+        let loss_d_real = self.mse_loss.forward(
             real_result.clone(),
-            real_labels.clone(),
-            nn::loss::Reduction::Auto,
+            true_labels.clone(),
+            nn::loss::Reduction::Mean,
         );
-        let loss_fake = self.mse_loss.forward(
+        
+        let fake_labels: Tensor<B, 4> = Tensor::zeros_like(&real_result);
+        let loss_g_fake = self.mse_loss.forward(
             fake_result.clone(),
-            fake_labels.clone(),
-            nn::loss::Reduction::Auto,
+            fake_labels,
+            nn::loss::Reduction::Mean,
         );
-        let output = GanOutput {
+        let dis_loss = loss_d_real + loss_g_fake.clone().detach();
+        let gen_loss = Tensor::ones_like(&loss_g_fake) - loss_g_fake;
+        GanOutput {
             train_sketches: item.sketches,
             fake_sketches: generated_sketches,
             real_sketch_output: real_result,
             fake_sketch_output: fake_result,
-            loss_discriminator: loss_real.clone(),
-            loss_generator: (loss_real.detach() + loss_fake) / 2.0,
-        };
-        output
+            loss_discriminator: dis_loss/2,
+            loss_generator: gen_loss,
+        }
     }
 }
 
@@ -171,8 +180,10 @@ pub struct TrainingConfig {
     pub num_workers: usize,
     #[config(default = 42)]
     pub seed: u64,
-    #[config(default = 0.0002)]
-    pub learning_rate: f64,
+    #[config(default = 0.002)]
+    pub discriminator_learning_rate: f64,
+    #[config(default = 0.002)]
+    pub generator_learning_rate: f64,
     #[config(default = 2)]
     pub mini_batch_discriminator: usize,
     #[config(default = 2)]
@@ -185,23 +196,39 @@ fn create_artifact_dir(artifact_dir: &str) {
     std::fs::create_dir_all(artifact_dir).ok();
 }
 
-
-fn burn_tensor4_to_rrtensor4<B: Backend>(tensor: Tensor<B, 4>) -> Result<rerun::Tensor, Box<dyn std::error::Error>>{
+fn burn_tensor4_to_rrtensor4<B: Backend>(
+    tensor: Tensor<B, 4>,
+) -> Result<rerun::Tensor, Box<dyn std::error::Error>> {
     let tensor_data = tensor.to_data();
-    let shape: [usize; 4] = tensor_data.shape.clone().try_into().expect("failed to unpack shape");
-    let tensor_vec = tensor_data.into_vec().expect("failed to convert tensor data to vec");
+    let shape: [usize; 4] = tensor_data
+        .shape
+        .clone()
+        .try_into()
+        .expect("failed to unpack shape");
+    let tensor_vec = tensor_data
+        .into_vec()
+        .expect("failed to convert tensor data to vec");
 
-    fn get_val(data: &Vec<f32>, data_shape: &[usize; 4], n: usize, c: usize, h: usize, w: usize) -> f32{
-        let index = n * data_shape[1]* data_shape[2]* data_shape[3] + c * data_shape[2] * data_shape[3] + h * data_shape[3] + w;
+    fn get_val(
+        data: &Vec<f32>,
+        data_shape: &[usize; 4],
+        n: usize,
+        c: usize,
+        h: usize,
+        w: usize,
+    ) -> f32 {
+        let index = n * data_shape[1] * data_shape[2] * data_shape[3]
+            + c * data_shape[2] * data_shape[3]
+            + h * data_shape[3]
+            + w;
         data[index]
     }
-    
-    let ndtensor = ndarray::Array4::<f32>::from_shape_fn(shape, |(n, c, h, w )|{
+
+    let ndtensor = ndarray::Array4::<f32>::from_shape_fn(shape, |(n, c, h, w)| {
         get_val(&tensor_vec, &shape, n, c, h, w)
     });
     Ok(rerun::Tensor::try_from(ndtensor)?.with_dim_names(["batch", "color", "height", "width"]))
-}  
-
+}
 
 pub fn train_gan<B: AutodiffBackend>(
     artifact_dir: &str,
@@ -262,63 +289,83 @@ pub fn train_gan<B: AutodiffBackend>(
     let epoch_bar = m.add(ProgressBar::new(config.num_epochs as u64));
     epoch_bar.set_style(sty.clone());
     epoch_bar.set_message("Epochs");
-    
-    
+
     // Iterate over our training and validation loop for X epochs.
+    let log_image_interval = 1;
     for _epoch in 1..config.num_epochs + 1 {
         epoch_bar.inc(1);
 
         let training_bar = m.add(ProgressBar::new(train_size as u64));
         training_bar.set_style(sty.clone());
         training_bar.set_message("Training:");
-
-
         // Implement our training loop.
-        for (_iteration, batch) in dataloader_train.iter().enumerate() {
+        for (iteration, batch) in dataloader_train.iter().enumerate() {
             let photos = batch.photos.clone();
-
             let output = model.forward_training(batch);
+            let loss_d = output.loss_discriminator;
+            let loss_g = output.loss_generator;
 
-            let grad_d = output.loss_discriminator.clone().backward();
-            let grad_d = GradientsParams::from_grads(grad_d, &model.discriminator);
-            let grad_g = output.loss_generator.clone().backward();
-            let grad_g = GradientsParams::from_grads(grad_g, &model.generator);
+            let grad_d = loss_d.clone().backward();
+            let grad_g = loss_g.clone().backward();
 
-            model.discriminator =
-                opt_discriminator.step(config.learning_rate, model.discriminator, grad_d);
-            model.generator = opt_generator.step(config.learning_rate, model.generator, grad_g);
-            if let Ok(ten) = burn_tensor4_to_rrtensor4(photos){
-                let _ = log.log("input_images", &ten);
-            }
-
-            if let Ok(ten) = burn_tensor4_to_rrtensor4(output.train_sketches){
-                let _ = log.log("real_sketches", &ten);
-            }
-
-            if let Ok(ten) = burn_tensor4_to_rrtensor4(output.fake_sketches){
-                let _ = log.log("generated_sketches", &ten);
-            }
-            let gen_los = output.loss_generator.mean().into_scalar().to_f64();
-            let dis_los = output.loss_discriminator.mean().into_scalar().to_f64();
+            let grad_d_param = GradientsParams::from_grads(grad_d, &model.discriminator);
+            let grad_g_param = GradientsParams::from_grads(grad_g, &model.generator);
             
-            let _ = log.log("generator_loss", &rerun::Scalar::new(gen_los));
-            let _ = log.log("discriminator_loss", &rerun::Scalar::new(dis_los));
+            model.discriminator =
+                opt_discriminator.step(config.discriminator_learning_rate, model.discriminator, grad_d_param);
+            model.generator =
+                opt_generator.step(config.generator_learning_rate, model.generator, grad_g_param);
 
+            if iteration % log_image_interval == 0 {
 
-            training_bar.set_message(format!("Training - gen loss: {:3e}, dis loss: {:3e}",  gen_los, dis_los));
+                if let Ok(ten) = burn_tensor4_to_rrtensor4(output.real_sketch_output){
+                    let _ = log.log("raw/real_result", &ten);
+                }
+
+                if let Ok(ten) = burn_tensor4_to_rrtensor4(output.fake_sketch_output){
+                    let _ = log.log("raw/fake_result", &ten);
+                }
+
+                if let Ok(ten) = burn_tensor4_to_rrtensor4(photos) {
+                    let _ = log.log("imges/input_images", &ten);
+                }
+
+                if let Ok(ten) = burn_tensor4_to_rrtensor4(output.train_sketches) {
+                    let _ = log.log("imges/real_sketches", &ten);
+                }
+
+                if let Ok(ten) = burn_tensor4_to_rrtensor4(output.fake_sketches) {
+                    let _ = log.log("imges/generated_sketches", &ten);
+                }
+            }
+            let gen_loss = loss_g.mean().into_scalar().to_f64();
+            let dis_loss = loss_d.mean().into_scalar().to_f64();
+
+            let _ = log.log("graphs/training/generator_loss", &rerun::Scalar::new(gen_loss));
+            let _ = log.log("graphs/training/discriminator_loss", &rerun::Scalar::new(dis_loss));
+
+            training_bar.set_message(format!(
+                "Training - gen loss: {:.3e}, dis loss: {:.3e}",
+                gen_loss, dis_loss
+            ));
+
             training_bar.inc(config.batch_size as u64);
         }
         m.remove(&training_bar);
         // Get the model without autodiff.
         let model_valid = model.valid();
-        
+
         let valid_bar = m.add(ProgressBar::new(valid_size as u64));
         valid_bar.set_style(sty.clone());
         valid_bar.set_message("Valid Progress");
         // Implement our validation loop.
         for (_iteration, batch) in dataloader_test.iter().enumerate() {
             let output = model_valid.forward_training(batch);
-            valid_bar.set_message(format!("Valid - gen loss: {}, dis loss: {}",  output.loss_generator.mean().into_scalar(), output.loss_discriminator.mean().into_scalar()));
+            valid_bar.set_message(format!(
+                "Valid - gen loss: {:.3e}, dis loss: {:.3e}",
+                output.loss_generator.mean().into_scalar().to_f64(),
+                output.loss_discriminator.mean().into_scalar().to_f64()
+            ));
             valid_bar.inc(config.batch_size as u64);
         }
         m.remove(&valid_bar);
