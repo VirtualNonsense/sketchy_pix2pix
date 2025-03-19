@@ -1,6 +1,5 @@
 use burn::{
-    nn::conv::{Conv2d, Conv2dConfig},
-    prelude::*,
+    nn::conv::{Conv2d, Conv2dConfig}, optim::GradientsParams, prelude::*
 };
 use nn::{
     BatchNorm, BatchNormConfig, Initializer, LeakyRelu, LeakyReluConfig, PaddingConfig2d, Sigmoid,
