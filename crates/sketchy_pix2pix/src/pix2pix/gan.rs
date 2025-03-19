@@ -304,7 +304,7 @@ pub fn train_gan<B: AutodiffBackend>(
                 }
 
                 if let Ok(c) = LogContainer::from_burn_tensorf32(output.fake_sketches, label.clone()){
-                    let _ = c.log_to_stream(&log, "imges/generated_sketches");
+                    let _ = c.log_to_stream(&log, "imges/fake_sketches");
                 }
 
             }
