@@ -286,6 +286,8 @@ pub fn train_gan<B: AutodiffBackend>(
             let grad_g_param = GradientsParams::from_grads(grad_g, &model.generator);
             
             if iteration % log_image_interval == 0 {
+
+                model.discriminator.log_graph(&log, &grad_d_param);
                 
                 let label = ["batch", "color", "height", "width"];
                 if let Ok(c) = LogContainer::from_burn_tensorf32(output.real_sketch_output, label.clone()){

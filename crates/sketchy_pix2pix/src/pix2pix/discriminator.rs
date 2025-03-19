@@ -5,6 +5,9 @@ use burn::{
 use nn::{
     BatchNorm, BatchNormConfig, Initializer, LeakyRelu, LeakyReluConfig, PaddingConfig2d, Sigmoid,
 };
+use rerun::RecordingStream;
+
+use crate::util::LogContainer;
 
 #[derive(Module, Debug)]
 pub struct Pix2PixDiscriminator<B: Backend> {
@@ -103,5 +106,16 @@ impl<B: Backend> Pix2PixDiscriminator<B> {
         let x = self.lrelu.forward(self.bn5.forward(self.conv5.forward(x)));
         let logits = self.conv_out.forward(x);
         self.sigmoid.forward(logits)
+    }
+    
+    pub fn log_graph(&self, log: &RecordingStream, grad: &GradientsParams) {
+        let grad_option: Option<Tensor<B, 4>> = grad.get((self.conv1).weight.id);
+        if let Some(grad) = grad_option {
+            let labels = ["channels_out", "channels_in", "width", "height"];
+            
+            if let Ok(c) = LogContainer::from_burn_tensorf32(grad, labels.clone()){
+                let _ = c.log_to_stream(&log, "discriminator/grad/");
+            }
+        };
     }
 }
