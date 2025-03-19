@@ -65,7 +65,11 @@ impl LogContainer<rerun::Tensor>
                 //     + w;
                 let mut idx = pos[ID-1];
                 for i in 1..ID{
-                    idx += pos[i - 1] * data_shape[i];
+                    let mut tmp = pos[i - 1];
+                    for j in i..ID {
+                        tmp *= data_shape[j];
+                    }
+                    idx += tmp;
                 }
                 data[idx]
             }
