@@ -111,36 +111,42 @@ impl<B: Backend> Pix2PixModel<B> {
 
         let real_result = self
             .discriminator
-            .forward(item.photos.clone(), item.sketches.clone());
-        let fake_result = self
+            .forward(item.sketches.clone(), item.photos.clone());
+        let fake_result_for_discriminator = self
             .discriminator
+            // IMPORTANT: detatch generated sketch from generator.
+            .forward(generated_sketches.clone().detach(), item.photos.clone());
+        let fake_result_for_generator = self
+            .discriminator
+            // IMPORTANT the discriminator should not be included in autograd path.
+            .clone().no_grad()
             .forward(generated_sketches.clone(), item.sketches.clone());
-        // Erstelle Ziel-Tensoren: echte Bilder sollen als 1 klassifiziert werden, gefälschte als 0
-        // let true_labels: Tensor<B, 4, Int> = Tensor::ones(real_result.shape(), &real_result.device());
-        // let loss_d_real = self.bce_loss.forward(
-        //     real_result.clone(),
-        //     true_labels.clone(),
-        // );
         let true_labels = Tensor::ones_like(&real_result);
+        let fake_labels: Tensor<B, 4> = Tensor::zeros_like(&real_result);
         let loss_d_real = self.mse_loss.forward(
             real_result.clone(),
             true_labels.clone(),
             nn::loss::Reduction::Mean,
         );
-        
-        let fake_labels: Tensor<B, 4> = Tensor::zeros_like(&real_result);
-        let loss_g_fake = self.mse_loss.forward(
-            fake_result.clone(),
+        let loss_d_fake = self.mse_loss.forward(
+            fake_result_for_discriminator,
             fake_labels,
             nn::loss::Reduction::Mean,
         );
-        let dis_loss = loss_d_real + loss_g_fake.clone().detach();
-        let gen_loss = Tensor::ones_like(&loss_g_fake) - loss_g_fake;
+        
+        let fake_labels: Tensor<B, 4> = Tensor::zeros_like(&real_result);
+        let loss_g_fake = self.mse_loss.forward(
+            fake_result_for_generator.clone(),
+            fake_labels,
+            nn::loss::Reduction::Mean,
+        );
+        let gen_loss = Tensor::ones_like(&loss_g_fake) - loss_g_fake.clone();
+        let dis_loss = loss_d_real + loss_d_fake;
         GanOutput {
             train_sketches: item.sketches,
             fake_sketches: generated_sketches,
             real_sketch_output: real_result,
-            fake_sketch_output: fake_result,
+            fake_sketch_output: fake_result_for_generator,
             loss_discriminator: dis_loss/2,
             loss_generator: gen_loss,
         }
@@ -259,7 +265,7 @@ pub fn train_gan<B: AutodiffBackend>(
     epoch_bar.set_message("Epochs");
 
     // Iterate over our training and validation loop for X epochs.
-    let log_image_interval = 1;
+    let log_image_interval = 10;
     for _epoch in 1..config.num_epochs + 1 {
         epoch_bar.inc(1);
 
