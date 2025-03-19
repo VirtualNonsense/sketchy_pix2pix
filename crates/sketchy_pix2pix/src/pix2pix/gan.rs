@@ -13,12 +13,12 @@ use burn::{
 };
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rerun::{RecordingStream, external::ndarray};
+use rerun::RecordingStream;
 
-use crate::sketchy_database::{
+use crate::{sketchy_database::{
     sketchy_batcher::{SketchyBatch, SketchyBatcher},
     sketchy_dataset::{PhotoAugmentation, SketchAugmentation, SketchyDataset},
-};
+}, util::LogContainer};
 
 use super::{
     discriminator::{Pix2PixDescriminatorConfig, Pix2PixDiscriminator},
@@ -196,39 +196,7 @@ fn create_artifact_dir(artifact_dir: &str) {
     std::fs::create_dir_all(artifact_dir).ok();
 }
 
-fn burn_tensor4_to_rrtensor4<B: Backend>(
-    tensor: Tensor<B, 4>,
-) -> Result<rerun::Tensor, Box<dyn std::error::Error>> {
-    let tensor_data = tensor.to_data();
-    let shape: [usize; 4] = tensor_data
-        .shape
-        .clone()
-        .try_into()
-        .expect("failed to unpack shape");
-    let tensor_vec = tensor_data
-        .into_vec()
-        .expect("failed to convert tensor data to vec");
 
-    fn get_val(
-        data: &Vec<f32>,
-        data_shape: &[usize; 4],
-        n: usize,
-        c: usize,
-        h: usize,
-        w: usize,
-    ) -> f32 {
-        let index = n * data_shape[1] * data_shape[2] * data_shape[3]
-            + c * data_shape[2] * data_shape[3]
-            + h * data_shape[3]
-            + w;
-        data[index]
-    }
-
-    let ndtensor = ndarray::Array4::<f32>::from_shape_fn(shape, |(n, c, h, w)| {
-        get_val(&tensor_vec, &shape, n, c, h, w)
-    });
-    Ok(rerun::Tensor::try_from(ndtensor)?.with_dim_names(["batch", "color", "height", "width"]))
-}
 
 pub fn train_gan<B: AutodiffBackend>(
     artifact_dir: &str,
@@ -311,38 +279,40 @@ pub fn train_gan<B: AutodiffBackend>(
             let grad_d_param = GradientsParams::from_grads(grad_d, &model.discriminator);
             let grad_g_param = GradientsParams::from_grads(grad_g, &model.generator);
             
-            model.discriminator =
-                opt_discriminator.step(config.discriminator_learning_rate, model.discriminator, grad_d_param);
-            model.generator =
-                opt_generator.step(config.generator_learning_rate, model.generator, grad_g_param);
-
             if iteration % log_image_interval == 0 {
-
-                if let Ok(ten) = burn_tensor4_to_rrtensor4(output.real_sketch_output){
-                    let _ = log.log("raw/real_result", &ten);
+                
+                let label = ["batch", "color", "height", "width"];
+                if let Ok(c) = LogContainer::from_burn_tensorf32(output.real_sketch_output, label.clone()){
+                    let _ = c.log_to_stream(&log, "raw/real_result");
+                }
+                if let Ok(c) = LogContainer::from_burn_tensorf32(output.fake_sketch_output, label.clone()){
+                    let _ = c.log_to_stream(&log, "raw/fake_result");
                 }
 
-                if let Ok(ten) = burn_tensor4_to_rrtensor4(output.fake_sketch_output){
-                    let _ = log.log("raw/fake_result", &ten);
+                if let Ok(c) = LogContainer::from_burn_tensorf32(photos, label.clone()){
+                    let _ = c.log_to_stream(&log, "imges/input_images");
+                }
+                
+                if let Ok(c) = LogContainer::from_burn_tensorf32(output.train_sketches, label.clone()){
+                    let _ = c.log_to_stream(&log, "imges/real_sketches");
                 }
 
-                if let Ok(ten) = burn_tensor4_to_rrtensor4(photos) {
-                    let _ = log.log("imges/input_images", &ten);
+                if let Ok(c) = LogContainer::from_burn_tensorf32(output.fake_sketches, label.clone()){
+                    let _ = c.log_to_stream(&log, "imges/generated_sketches");
                 }
 
-                if let Ok(ten) = burn_tensor4_to_rrtensor4(output.train_sketches) {
-                    let _ = log.log("imges/real_sketches", &ten);
-                }
-
-                if let Ok(ten) = burn_tensor4_to_rrtensor4(output.fake_sketches) {
-                    let _ = log.log("imges/generated_sketches", &ten);
-                }
             }
             let gen_loss = loss_g.mean().into_scalar().to_f64();
             let dis_loss = loss_d.mean().into_scalar().to_f64();
 
             let _ = log.log("graphs/training/generator_loss", &rerun::Scalar::new(gen_loss));
             let _ = log.log("graphs/training/discriminator_loss", &rerun::Scalar::new(dis_loss));
+
+
+            model.discriminator =
+                opt_discriminator.step(config.discriminator_learning_rate, model.discriminator, grad_d_param);
+            model.generator =
+                opt_generator.step(config.generator_learning_rate, model.generator, grad_g_param);
 
             training_bar.set_message(format!(
                 "Training - gen loss: {:.3e}, dis loss: {:.3e}",
