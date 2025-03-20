@@ -6,6 +6,7 @@ use burn::{
     nn::loss::{BinaryCrossEntropyLoss, BinaryCrossEntropyLossConfig, MseLoss},
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
+    record::FileRecorder,
     tensor::{Tensor, Transaction, backend::AutodiffBackend},
     train::{
         TrainOutput, TrainStep, ValidStep,
@@ -16,11 +17,11 @@ use burn::{
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 
 use crate::{
+    logging::SketchyGanLogger,
     sketchy_database::{
         sketchy_batcher::{SketchyBatch, SketchyBatcher},
         sketchy_dataset::{PhotoAugmentation, SketchAugmentation, SketchyClass, SketchyDataset},
     },
-    logging::SketchyGanLogger,
 };
 
 use super::{
@@ -118,7 +119,10 @@ impl<B: Backend> Pix2PixModel<B> {
         let fake_result_for_discriminator = self
             .discriminator
             // IMPORTANT: detatch generated sketch from generator.
-            .forward(generated_sketches.clone().detach(), item.photos.clone().detach());
+            .forward(
+                generated_sketches.clone().detach(),
+                item.photos.clone().detach(),
+            );
         let fake_result_for_generator = self
             .discriminator
             // IMPORTANT the discriminator should not be included in autograd path.
@@ -195,7 +199,7 @@ pub struct TrainingConfig {
     pub model: Pix2PixModelConfig,
     pub optimizer_discriminator: AdamConfig,
     pub optimizer_generator: AdamConfig,
-    #[config(default = 10)]
+    #[config(default = 100)]
     pub num_epochs: usize,
     #[config(default = 4)]
     pub batch_size: usize,
@@ -219,12 +223,12 @@ fn create_artifact_dir(artifact_dir: &str) {
     std::fs::create_dir_all(artifact_dir).ok();
 }
 
-
-pub fn train_gan<B: AutodiffBackend>(
+pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
     artifact_dir: &str,
     config: TrainingConfig,
     device: B::Device,
     log: SketchyGanLogger,
+    recorder: R,
 ) {
     create_artifact_dir(artifact_dir);
     config
@@ -250,7 +254,9 @@ pub fn train_gan<B: AutodiffBackend>(
     )
     .expect("");
 
-    let (train, valid) = data.filter(|item| item.sketch_class == SketchyClass::Penguin).split(0.8);
+    let (train, valid) = data
+        .filter(|item| item.sketch_class == SketchyClass::Penguin)
+        .split(0.8);
 
     let train_size = train.len();
     let valid_size = valid.len();
@@ -279,8 +285,9 @@ pub fn train_gan<B: AutodiffBackend>(
     let epoch_bar = m.add(ProgressBar::new(config.num_epochs as u64));
     epoch_bar.set_style(sty.clone());
     epoch_bar.set_message("Epochs");
+    let checkpoint_rotate = 10;
 
-    for _epoch in 1..config.num_epochs + 1 {
+    for epoch in 1..config.num_epochs + 1 {
         epoch_bar.inc(1);
 
         let training_bar = m.add(ProgressBar::new(train_size as u64));
@@ -318,6 +325,9 @@ pub fn train_gan<B: AutodiffBackend>(
             training_bar.inc(config.batch_size as u64);
         }
         m.remove(&training_bar);
+        let _save_result = model
+            .clone()
+            .save_file(format!("{}/checkpoints/model_{:03}", &artifact_dir, epoch % checkpoint_rotate), &recorder);
         // Get the model without autodiff.
         let model_valid = model.valid();
 
@@ -333,4 +343,6 @@ pub fn train_gan<B: AutodiffBackend>(
         }
         m.remove(&valid_bar);
     }
+
+    let _save_result = model.save_file(format!("{}/trained", &artifact_dir), &recorder);
 }
