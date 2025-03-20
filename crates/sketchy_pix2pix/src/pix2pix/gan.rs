@@ -69,9 +69,9 @@ pub struct GanOutput<B: Backend> {
     /// dim [N, 1, 16, 16]
     fake_sketch_output: Tensor<B, 4>,
     /// loss of discriminator
-    loss_discriminator: Tensor<B, 1>,
+    loss_discriminator: Tensor<B, 2>,
     /// loss of generator
-    loss_generator: Tensor<B, 1>,
+    loss_generator: Tensor<B, 2>,
 }
 
 impl<B: Backend> ItemLazy for GanOutput<B> {
@@ -126,32 +126,36 @@ impl<B: Backend> Pix2PixModel<B> {
             .clone()
             .no_grad()
             .forward(generated_sketches.clone(), item.sketches.clone());
-        let true_labels = Tensor::ones_like(&real_result);
-        let fake_labels: Tensor<B, 4> = Tensor::zeros_like(&real_result);
         let loss_d_real = self.mse_loss.forward(
             real_result.clone(),
-            true_labels.clone(),
+            Tensor::ones_like(&real_result),
             nn::loss::Reduction::Mean,
         );
         let loss_d_fake = self.mse_loss.forward(
-            fake_result_for_discriminator,
-            fake_labels,
+            fake_result_for_discriminator.clone(),
+            Tensor::zeros_like(&fake_result_for_discriminator),
             nn::loss::Reduction::Mean,
         );
 
         let loss_g_fake = self.mse_loss.forward(
             fake_result_for_generator.clone(),
-            true_labels,
+            Tensor::ones_like(&fake_result_for_generator),
             nn::loss::Reduction::Mean,
         );
-        let gen_loss = loss_g_fake;
-        let dis_loss = loss_d_real + loss_d_fake;
+        let gen_loss = Tensor::cat(vec![loss_g_fake.unsqueeze_dims(&[1, -1])], 0);
+        let dis_loss = Tensor::cat(
+            vec![
+                loss_d_real.unsqueeze_dims(&[1, -1]),
+                loss_d_fake.unsqueeze_dims(&[1, -1]),
+            ],
+            0,
+        );
         GanOutput {
             train_sketches: item.sketches,
             fake_sketches: generated_sketches,
             real_sketch_output: real_result,
             fake_sketch_output: fake_result_for_generator,
-            loss_discriminator: dis_loss / 2,
+            loss_discriminator: dis_loss,
             loss_generator: gen_loss,
         }
     }
@@ -161,7 +165,16 @@ impl<B: AutodiffBackend> TrainStep<SketchyBatch<B>, GanOutput<B>> for Pix2PixMod
     fn step(&self, item: SketchyBatch<B>) -> TrainOutput<GanOutput<B>> {
         let output = self.forward_training(item);
 
-        TrainOutput::new(self, output.loss_generator.backward(), output)
+        TrainOutput::new(
+            self,
+            output
+                .loss_generator
+                .clone()
+                .mean_dim(0)
+                .squeeze::<1>(0)
+                .backward(),
+            output,
+        )
     }
 }
 
@@ -173,7 +186,8 @@ impl<B: Backend> ValidStep<SketchyBatch<B>, GanOutput<B>> for Pix2PixModel<B> {
 
 impl<B: Backend> Adaptor<LossInput<B>> for GanOutput<B> {
     fn adapt(&self) -> LossInput<B> {
-        LossInput::new(self.loss_discriminator.clone())
+        let loss_mean = self.loss_discriminator.clone().mean_dim(0).squeeze(0);
+        LossInput::new(loss_mean)
     }
 }
 
@@ -285,8 +299,12 @@ pub fn train_gan<B: AutodiffBackend>(
         for (iteration, batch) in dataloader_train.iter().enumerate() {
             let photos = batch.photos.clone();
             let output = model.forward_training(batch);
-            let loss_d = output.loss_discriminator;
-            let loss_g = output.loss_generator;
+            let loss_d = output
+                .loss_discriminator
+                .clone()
+                .mean_dim(0)
+                .squeeze::<1>(0);
+            let loss_g = output.loss_generator.clone().mean_dim(0).squeeze::<1>(0);
 
             let grad_d = loss_d.clone().backward();
             let grad_g = loss_g.clone().backward();
@@ -296,24 +314,25 @@ pub fn train_gan<B: AutodiffBackend>(
 
             if iteration % log_image_interval == 0 {
                 match LogContainer::from_burn_4d_tensoru8(
-                    convert_to_picture(output.real_sketch_output ),
+                    convert_to_picture(output.real_sketch_output),
                     imgae_grid_options.clone(),
-                ){
+                ) {
                     Ok(c) => {
                         let _ = log.log("raw/real_result", &c);
-                    } 
+                    }
                     Err(e) => {
                         let _ = log.log(
                             "raw/real_result",
                             &rerun::TextLog::new(format!(
                                 "Failed to convert input real_sketch_output due to {:?}",
                                 e
-                            )).with_level(rerun::TextLogLevel::ERROR),
+                            ))
+                            .with_level(rerun::TextLogLevel::ERROR),
                         );
                     }
                 }
                 match LogContainer::from_burn_4d_tensoru8(
-                    convert_to_picture(output.fake_sketch_output ),
+                    convert_to_picture(output.fake_sketch_output),
                     imgae_grid_options.clone(),
                 ) {
                     Ok(c) => {
@@ -325,18 +344,19 @@ pub fn train_gan<B: AutodiffBackend>(
                             &rerun::TextLog::new(format!(
                                 "Failed to convert input fake_sketch_output due to {:?}",
                                 e
-                            )).with_level(rerun::TextLogLevel::ERROR),
+                            ))
+                            .with_level(rerun::TextLogLevel::ERROR),
                         );
                     }
                 }
 
                 match LogContainer::from_burn_4d_tensoru8(
-                    convert_to_picture(photos ),
+                    convert_to_picture(photos),
                     imgae_grid_options.clone(),
                 ) {
                     Ok(c) => match log.log("imges/input_images", &c) {
                         Ok(_) => (),
-                        _ => {},
+                        _ => {}
                     },
                     Err(e) => {
                         let _ = log.log(
@@ -344,12 +364,13 @@ pub fn train_gan<B: AutodiffBackend>(
                             &rerun::TextLog::new(format!(
                                 "Failed to convert input photos due to {:?}",
                                 e
-                            )).with_level(rerun::TextLogLevel::ERROR),
+                            ))
+                            .with_level(rerun::TextLogLevel::ERROR),
                         );
                     }
                 }
                 match LogContainer::from_burn_4d_tensoru8(
-                    convert_to_picture(output.train_sketches ),
+                    convert_to_picture(output.train_sketches),
                     imgae_grid_options.clone(),
                 ) {
                     Ok(c) => {
@@ -361,12 +382,13 @@ pub fn train_gan<B: AutodiffBackend>(
                             &rerun::TextLog::new(format!(
                                 "Failed to convert train_sketches due to {:?}",
                                 e
-                            )).with_level(rerun::TextLogLevel::ERROR),
+                            ))
+                            .with_level(rerun::TextLogLevel::ERROR),
                         );
                     }
                 }
                 match LogContainer::from_burn_4d_tensoru8(
-                    convert_to_picture(output.fake_sketches ),
+                    convert_to_picture(output.fake_sketches),
                     imgae_grid_options.clone(),
                 ) {
                     Ok(c) => {
@@ -378,20 +400,44 @@ pub fn train_gan<B: AutodiffBackend>(
                             &rerun::TextLog::new(format!(
                                 "Failed to convert fake_sketches due to {:?}",
                                 e
-                            )).with_level(rerun::TextLogLevel::ERROR),
+                            ))
+                            .with_level(rerun::TextLogLevel::ERROR),
                         );
                     }
                 }
             }
             let gen_loss = loss_g.mean().into_scalar().to_f64();
             let dis_loss = loss_d.mean().into_scalar().to_f64();
-
+            if output.loss_generator.shape().dims::<2>()[0] > 1 {
+                let loss = output.loss_generator.mean_dim(1).squeeze::<1>(1);
+                let loss = loss.to_data().to_vec::<f32>();
+                if let Ok(c) = loss {
+                    for (i, val) in c.iter().enumerate() {
+                        let _ = log.log(
+                            format!("graphs/training/loss/generator/component_{}", i),
+                            &rerun::Scalar::new(*val as f64),
+                        );
+                    }
+                }
+            }
+            if output.loss_discriminator.shape().dims::<2>()[0] > 1 {
+                let loss = output.loss_discriminator.mean_dim(1).squeeze::<1>(1);
+                let loss = loss.to_data().to_vec::<f32>();
+                if let Ok(c) = loss {
+                    for (i, val) in c.iter().enumerate() {
+                        let _ = log.log(
+                            format!("graphs/training/loss/discriminator/component_{}", i),
+                            &rerun::Scalar::new(*val as f64),
+                        );
+                    }
+                }
+            }
             let _ = log.log(
-                "graphs/training/generator_loss",
+                "graphs/training/loss/generator/mean",
                 &rerun::Scalar::new(gen_loss),
             );
             let _ = log.log(
-                "graphs/training/discriminator_loss",
+                "graphs/training/loss/discriminator/mean",
                 &rerun::Scalar::new(dis_loss),
             );
 
