@@ -377,7 +377,7 @@ impl SketchyItem {
             image = image.grayscale()
         }
         let bytes = image.into_bytes();
-        Ok(TensorData::new(bytes, vec![batch, channel, height, width]))
+        Ok(TensorData::new(bytes, vec![batch, height, width, channel]))
     }
 
     pub fn load_photo(&self) -> Result<TensorData, ImageError> {

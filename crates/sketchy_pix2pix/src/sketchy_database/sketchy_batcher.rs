@@ -30,8 +30,8 @@ impl<B: Backend> Batcher<SketchyItem, SketchyBatch<B>> for SketchyBatcher<B> {
                     ok_tuple.1.expect("failed to extract sketch"),
                 )
             }).fold((vec![], vec![]), |(mut photos, mut sketches), tuple: (burn::prelude::TensorData, burn::prelude::TensorData)| {
-                photos.push(Tensor::<B, 4>::from_data(tuple.0, &self.device));
-                sketches.push(Tensor::<B, 4>::from_data(tuple.1, &self.device));
+                photos.push(Tensor::<B, 4>::from_data(tuple.0, &self.device).permute([0, 3, 1, 2]));
+                sketches.push(Tensor::<B, 4>::from_data(tuple.1, &self.device).permute([0, 3, 1, 2]));
                 (photos, sketches)
             });
         let mut photos = Tensor::cat(photos, 0).to_device(&self.device);
