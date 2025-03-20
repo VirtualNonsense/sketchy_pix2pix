@@ -381,7 +381,7 @@ impl SketchyItem {
     }
 
     pub fn load_photo(&self) -> Result<TensorData, ImageError> {
-        return Self::open_picture(&self.photo, true);
+        return Self::open_picture(&self.photo, false);
     }
 
     pub fn load_sketch(&self) -> Result<TensorData, ImageError> {

@@ -48,7 +48,7 @@ pub struct Pix2PixGenerator<B: Backend> {
 
 #[derive(Config, Debug)]
 pub struct Pix2PixGeneratorConfig {
-    #[config(default = "1")]
+    #[config(default = "3")]
     pub in_channels: usize,
     #[config(default = "1")]
     pub out_channels: usize,
