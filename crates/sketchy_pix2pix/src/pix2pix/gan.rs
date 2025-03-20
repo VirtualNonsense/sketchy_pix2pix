@@ -110,15 +110,15 @@ impl<B: Backend> ItemLazy for GanOutput<B> {
 
 impl<B: Backend> Pix2PixModel<B> {
     pub fn forward_training(&self, item: SketchyBatch<B>) -> GanOutput<B> {
-        let generated_sketches = self.generator.forward(item.photos.clone());
+        let generated_sketches = self.generator.forward(item.photos.clone().detach());
 
         let real_result = self
             .discriminator
-            .forward(item.sketches.clone(), item.photos.clone());
+            .forward(item.sketches.clone().detach(), item.photos.clone().detach());
         let fake_result_for_discriminator = self
             .discriminator
             // IMPORTANT: detatch generated sketch from generator.
-            .forward(generated_sketches.clone().detach(), item.photos.clone());
+            .forward(generated_sketches.clone().detach(), item.photos.clone().detach());
         let fake_result_for_generator = self
             .discriminator
             // IMPORTANT the discriminator should not be included in autograd path.
