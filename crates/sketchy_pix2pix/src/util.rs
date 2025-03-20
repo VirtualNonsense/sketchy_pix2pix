@@ -189,7 +189,7 @@ impl_from_burn_tensore!(from_burn_tensori64, i64);
 
 
 
-#[derive(Default)]
+#[derive(Default, Clone, Debug, PartialEq)]
 pub enum ImageGrindOptions{
     Columns(usize),
     Rows(usize),
@@ -251,6 +251,10 @@ impl LogContainer<rerun::Image>{
             ));
         }
         let shape = shape.unwrap();
+        
+        let h = shape[0];
+        let w = shape[1];
+        let c = shape[2]; 
 
         let tensor_vec: Result<Vec<i32>, _> = tensor_data.into_vec();
 
@@ -262,21 +266,24 @@ impl LogContainer<rerun::Image>{
         }
         let tensor_vec = tensor_vec.unwrap();
         
-        let ishape: [usize; 3] = [shape[0], shape[1], shape[2]];
+        let ishape: [usize; 3] = [h, w, c];
         let nd = ndarray::Array3::<i32>::from_shape_fn(ishape, |n| {
             let n = n.into();
             get_val(&tensor_vec, &ishape, &n)
         });
-        let colors = ishape[2];
+        
         let image;
-        if colors == 3{
+        if c == 1 {
+            image = rerun::Image::from_color_model_and_tensor(rerun::ColorModel::L, nd);
+        }
+        else if c == 3{
             image = rerun::Image::from_color_model_and_tensor(rerun::ColorModel::RGB, nd);
         }
-        else if colors == 4 {
+        else if c == 4 {
             image = rerun::Image::from_color_model_and_tensor(rerun::ColorModel::RGBA, nd);
         }
         else{
-            return Err(LogContainerParsingError::ImageConstructionError(format!("{} is not a valid option for the color channel! choose either 3 (rgb) or 4 (rgba)", colors)));
+            return Err(LogContainerParsingError::ImageConstructionError(format!("{} is not a valid option for the color channel! choose either 1 (L), 3 (rgb) or 4 (rgba)", c)));
         }
         if let Err(err) = image{
             return Err(LogContainerParsingError::ImageConstructionError(format!("{:?}", err)))
@@ -289,8 +296,11 @@ impl LogContainer<rerun::Image>{
     pub fn from_burn_4d_tensoru8<B: Backend>(burn_tensor: Tensor<B, 4, burn::tensor::Int>, grid_settings: ImageGrindOptions) -> Result<Self, LogContainerParsingError> {
         let shape: [usize; 4] = burn_tensor.shape().dims();
         let b = shape[0];
+        let h = shape[1];
+        let w = shape[2];
+        let c = shape[3];
     
-        if b == 0 {
+        if b == 1 {
             let burn_tensor = burn_tensor.reshape([shape[1], shape[2], shape[3]]);
             return Self::from_burn_3d_tensoru8(burn_tensor);
         }
@@ -320,21 +330,21 @@ impl LogContainer<rerun::Image>{
             },
         };
     
-        let height = rows * shape[1];
-        let width = columns * shape[2];
-        let mut stitched_tensor: Tensor<B, 3, burn::tensor::Int> = Tensor::zeros([height, width, shape[3]], &burn_tensor.device());
+        let height = rows * h;
+        let width = columns * w;
+        let mut stitched_tensor: Tensor<B, 3, burn::tensor::Int> = Tensor::zeros([height, width, c], &burn_tensor.device());
     
         for i in 0..b {
             let row = i / columns;
             let col = i % columns;
-            let start_row = row * shape[1];
-            let start_col = col * shape[2];
-            let end_row = start_row + shape[1];
-            let end_col = start_col + shape[2];
+            let start_row = row * h;
+            let start_col = col * w;
+            let end_row = start_row + h;
+            let end_col = start_col + w;
     
-            let slice = burn_tensor.clone().slice([i..i+1, 0..shape[1], 0..shape[2], 0..shape[3]]);
-            let reshaped_slice = slice.reshape([shape[1], shape[2], shape[3]]);
-            stitched_tensor = stitched_tensor.slice_assign([start_row..end_row, start_col..end_col, 0..shape[3]], reshaped_slice);
+            let slice = burn_tensor.clone().slice([i..i+1, 0..h, 0..w, 0..c]);
+            let reshaped_slice = slice.reshape([h, w, c]);
+            stitched_tensor = stitched_tensor.slice_assign([start_row..end_row, start_col..end_col, 0..c], reshaped_slice);
         }
         Self::from_burn_3d_tensoru8(stitched_tensor)
     }
@@ -353,6 +363,22 @@ mod tests {
                 [3, 4]
             ], &burn::backend::wgpu::WgpuDevice::default());
         let log_container = LogContainer::from_burn_2d_tensoru8(tensor);
+        assert!(log_container.is_ok());
+    }
+    #[test]
+    fn test_from_burn_4d_tensoru8() {
+        let tensor: Tensor<Wgpu, 4, burn::prelude::Int> = Tensor::from_data([
+            [
+                [[1], [2]], 
+                [[3], [4]]
+            ],
+            [
+                [[5], [6]], 
+                [[7], [8]]
+            ]
+            
+        ], &burn::backend::wgpu::WgpuDevice::default());
+        let log_container = LogContainer::from_burn_4d_tensoru8(tensor, ImageGrindOptions::Auto);
         assert!(log_container.is_ok());
     }
 }

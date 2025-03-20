@@ -206,6 +206,12 @@ fn create_artifact_dir(artifact_dir: &str) {
     std::fs::create_dir_all(artifact_dir).ok();
 }
 
+fn convert_to_picture<B: Backend>(image_tensor: Tensor<B, 4>) -> Tensor<B, 4, Int> {
+    let image_tensor = image_tensor * 127.5 + 127.5;
+    let image_tensor = image_tensor.int();
+    image_tensor.permute([0, 2, 3, 1])
+}
+
 pub fn train_gan<B: AutodiffBackend>(
     artifact_dir: &str,
     config: TrainingConfig,
@@ -265,6 +271,7 @@ pub fn train_gan<B: AutodiffBackend>(
     let epoch_bar = m.add(ProgressBar::new(config.num_epochs as u64));
     epoch_bar.set_style(sty.clone());
     epoch_bar.set_message("Epochs");
+    let imgae_grid_options = ImageGrindOptions::default();
 
     // Iterate over our training and validation loop for X epochs.
     let log_image_interval = 10;
@@ -288,8 +295,10 @@ pub fn train_gan<B: AutodiffBackend>(
             let grad_g_param = GradientsParams::from_grads(grad_g, &model.generator);
 
             if iteration % log_image_interval == 0 {
-                let label = ["batch", "color", "height", "width"];
-                match LogContainer::from_burn_tensorf32(output.real_sketch_output, label.clone()) {
+                match LogContainer::from_burn_4d_tensoru8(
+                    convert_to_picture(output.real_sketch_output ),
+                    imgae_grid_options.clone(),
+                ){
                     Ok(c) => {
                         let _ = log.log("raw/real_result", &c);
                     } 
@@ -303,7 +312,10 @@ pub fn train_gan<B: AutodiffBackend>(
                         );
                     }
                 }
-                match LogContainer::from_burn_tensorf32(output.fake_sketch_output, label.clone()) {
+                match LogContainer::from_burn_4d_tensoru8(
+                    convert_to_picture(output.fake_sketch_output ),
+                    imgae_grid_options.clone(),
+                ) {
                     Ok(c) => {
                         let _ = log.log("raw/fake_result", &c);
                     }
@@ -319,8 +331,8 @@ pub fn train_gan<B: AutodiffBackend>(
                 }
 
                 match LogContainer::from_burn_4d_tensoru8(
-                    (photos * 127.5 + 127.5).int(),
-                    ImageGrindOptions::default(),
+                    convert_to_picture(photos ),
+                    imgae_grid_options.clone(),
                 ) {
                     Ok(c) => match log.log("imges/input_images", &c) {
                         Ok(_) => (),
@@ -336,8 +348,10 @@ pub fn train_gan<B: AutodiffBackend>(
                         );
                     }
                 }
-
-                match LogContainer::from_burn_tensorf32(output.train_sketches, label.clone()) {
+                match LogContainer::from_burn_4d_tensoru8(
+                    convert_to_picture(output.train_sketches ),
+                    imgae_grid_options.clone(),
+                ) {
                     Ok(c) => {
                         let _ = log.log("imges/real_sketches", &c);
                     }
@@ -351,8 +365,10 @@ pub fn train_gan<B: AutodiffBackend>(
                         );
                     }
                 }
-
-                match LogContainer::from_burn_tensorf32(output.fake_sketches, label.clone()) {
+                match LogContainer::from_burn_4d_tensoru8(
+                    convert_to_picture(output.fake_sketches ),
+                    imgae_grid_options.clone(),
+                ) {
                     Ok(c) => {
                         let _ = log.log("imges/fake_sketches", &c);
                     }
