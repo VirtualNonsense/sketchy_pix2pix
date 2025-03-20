@@ -6,19 +6,23 @@ use burn::{
     nn::loss::{BinaryCrossEntropyLoss, BinaryCrossEntropyLossConfig, MseLoss},
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
-    tensor::{backend::AutodiffBackend, cast::ToElement, Tensor, Transaction},
+    tensor::{Tensor, Transaction, backend::AutodiffBackend, cast::ToElement},
     train::{
-        metric::{Adaptor, ItemLazy, LossInput}, TrainOutput, TrainStep, ValidStep
+        TrainOutput, TrainStep, ValidStep,
+        metric::{Adaptor, ItemLazy, LossInput},
     },
 };
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rerun::RecordingStream;
 
-use crate::{sketchy_database::{
-    sketchy_batcher::{SketchyBatch, SketchyBatcher},
-    sketchy_dataset::{PhotoAugmentation, SketchAugmentation, SketchyDataset},
-}, util::LogContainer};
+use crate::{
+    sketchy_database::{
+        sketchy_batcher::{SketchyBatch, SketchyBatcher},
+        sketchy_dataset::{PhotoAugmentation, SketchAugmentation, SketchyDataset},
+    },
+    util::{ImageGrindOptions, LogContainer},
+};
 
 use super::{
     discriminator::{Pix2PixDescriminatorConfig, Pix2PixDiscriminator},
@@ -119,7 +123,8 @@ impl<B: Backend> Pix2PixModel<B> {
         let fake_result_for_generator = self
             .discriminator
             // IMPORTANT the discriminator should not be included in autograd path.
-            .clone().no_grad()
+            .clone()
+            .no_grad()
             .forward(generated_sketches.clone(), item.sketches.clone());
         let true_labels = Tensor::ones_like(&real_result);
         let fake_labels: Tensor<B, 4> = Tensor::zeros_like(&real_result);
@@ -133,21 +138,20 @@ impl<B: Backend> Pix2PixModel<B> {
             fake_labels,
             nn::loss::Reduction::Mean,
         );
-        
-        let fake_labels: Tensor<B, 4> = Tensor::zeros_like(&real_result);
+
         let loss_g_fake = self.mse_loss.forward(
             fake_result_for_generator.clone(),
-            fake_labels,
+            true_labels,
             nn::loss::Reduction::Mean,
         );
-        let gen_loss = Tensor::ones_like(&loss_g_fake) - loss_g_fake.clone();
+        let gen_loss = loss_g_fake;
         let dis_loss = loss_d_real + loss_d_fake;
         GanOutput {
             train_sketches: item.sketches,
             fake_sketches: generated_sketches,
             real_sketch_output: real_result,
             fake_sketch_output: fake_result_for_generator,
-            loss_discriminator: dis_loss/2,
+            loss_discriminator: dis_loss / 2,
             loss_generator: gen_loss,
         }
     }
@@ -201,8 +205,6 @@ fn create_artifact_dir(artifact_dir: &str) {
     std::fs::remove_dir_all(artifact_dir).ok();
     std::fs::create_dir_all(artifact_dir).ok();
 }
-
-
 
 pub fn train_gan<B: AutodiffBackend>(
     artifact_dir: &str,
@@ -284,41 +286,109 @@ pub fn train_gan<B: AutodiffBackend>(
 
             let grad_d_param = GradientsParams::from_grads(grad_d, &model.discriminator);
             let grad_g_param = GradientsParams::from_grads(grad_g, &model.generator);
-            
+
             if iteration % log_image_interval == 0 {
-                
                 let label = ["batch", "color", "height", "width"];
-                if let Ok(c) = LogContainer::from_burn_tensorf32(output.real_sketch_output, label.clone()){
-                    let _ = c.log_to_stream(&log, "raw/real_result");
+                match LogContainer::from_burn_tensorf32(output.real_sketch_output, label.clone()) {
+                    Ok(c) => {
+                        let _ = log.log("raw/real_result", &c);
+                    } 
+                    Err(e) => {
+                        let _ = log.log(
+                            "raw/real_result",
+                            &rerun::TextLog::new(format!(
+                                "Failed to convert input real_sketch_output due to {:?}",
+                                e
+                            )).with_level(rerun::TextLogLevel::ERROR),
+                        );
+                    }
                 }
-                if let Ok(c) = LogContainer::from_burn_tensorf32(output.fake_sketch_output, label.clone()){
-                    let _ = c.log_to_stream(&log, "raw/fake_result");
+                match LogContainer::from_burn_tensorf32(output.fake_sketch_output, label.clone()) {
+                    Ok(c) => {
+                        let _ = log.log("raw/fake_result", &c);
+                    }
+                    Err(e) => {
+                        let _ = log.log(
+                            "raw/fake_result",
+                            &rerun::TextLog::new(format!(
+                                "Failed to convert input fake_sketch_output due to {:?}",
+                                e
+                            )).with_level(rerun::TextLogLevel::ERROR),
+                        );
+                    }
                 }
 
-                if let Ok(c) = LogContainer::from_burn_tensorf32(photos, label.clone()){
-                    let _ = c.log_to_stream(&log, "imges/input_images");
-                }
-                
-                if let Ok(c) = LogContainer::from_burn_tensorf32(output.train_sketches, label.clone()){
-                    let _ = c.log_to_stream(&log, "imges/real_sketches");
+                match LogContainer::from_burn_4d_tensoru8(
+                    (photos * 127.5 + 127.5).int(),
+                    ImageGrindOptions::default(),
+                ) {
+                    Ok(c) => match log.log("imges/input_images", &c) {
+                        Ok(_) => (),
+                        _ => {},
+                    },
+                    Err(e) => {
+                        let _ = log.log(
+                            "imges/input_images",
+                            &rerun::TextLog::new(format!(
+                                "Failed to convert input photos due to {:?}",
+                                e
+                            )).with_level(rerun::TextLogLevel::ERROR),
+                        );
+                    }
                 }
 
-                if let Ok(c) = LogContainer::from_burn_tensorf32(output.fake_sketches, label.clone()){
-                    let _ = c.log_to_stream(&log, "imges/fake_sketches");
+                match LogContainer::from_burn_tensorf32(output.train_sketches, label.clone()) {
+                    Ok(c) => {
+                        let _ = log.log("imges/real_sketches", &c);
+                    }
+                    Err(e) => {
+                        let _ = log.log(
+                            "imges/real_sketches",
+                            &rerun::TextLog::new(format!(
+                                "Failed to convert train_sketches due to {:?}",
+                                e
+                            )).with_level(rerun::TextLogLevel::ERROR),
+                        );
+                    }
                 }
 
+                match LogContainer::from_burn_tensorf32(output.fake_sketches, label.clone()) {
+                    Ok(c) => {
+                        let _ = log.log("imges/fake_sketches", &c);
+                    }
+                    Err(e) => {
+                        let _ = log.log(
+                            "imges/fake_sketches",
+                            &rerun::TextLog::new(format!(
+                                "Failed to convert fake_sketches due to {:?}",
+                                e
+                            )).with_level(rerun::TextLogLevel::ERROR),
+                        );
+                    }
+                }
             }
             let gen_loss = loss_g.mean().into_scalar().to_f64();
             let dis_loss = loss_d.mean().into_scalar().to_f64();
 
-            let _ = log.log("graphs/training/generator_loss", &rerun::Scalar::new(gen_loss));
-            let _ = log.log("graphs/training/discriminator_loss", &rerun::Scalar::new(dis_loss));
+            let _ = log.log(
+                "graphs/training/generator_loss",
+                &rerun::Scalar::new(gen_loss),
+            );
+            let _ = log.log(
+                "graphs/training/discriminator_loss",
+                &rerun::Scalar::new(dis_loss),
+            );
 
-
-            model.discriminator =
-                opt_discriminator.step(config.discriminator_learning_rate, model.discriminator, grad_d_param);
-            model.generator =
-                opt_generator.step(config.generator_learning_rate, model.generator, grad_g_param);
+            model.discriminator = opt_discriminator.step(
+                config.discriminator_learning_rate,
+                model.discriminator,
+                grad_d_param,
+            );
+            model.generator = opt_generator.step(
+                config.generator_learning_rate,
+                model.generator,
+                grad_g_param,
+            );
 
             training_bar.set_message(format!(
                 "Training - gen loss: {:.3e}, dis loss: {:.3e}",

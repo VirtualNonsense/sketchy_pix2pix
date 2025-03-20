@@ -1,18 +1,31 @@
+use std::usize;
+
 use burn::{
     prelude::{Backend, Tensor},
     tensor::BasicOps,
 };
 use rerun::{
-    AsComponents, EntityPath, RecordingStream, RecordingStreamError,
-    external::ndarray::{self},
+    external::ndarray::{self}, AsComponents,
 };
 
 pub struct LogContainer<K: ?Sized + AsComponents> {
     component: K,
 }
 
+impl<K: ?Sized + AsComponents> AsComponents for LogContainer<K> {
+    fn as_serialized_batches(&self) -> Vec<rerun::SerializedComponentBatch> {
+        self.component.as_serialized_batches()
+    }
+    fn to_arrow(
+            &self,
+        ) -> rerun::SerializationResult<Vec<(rerun::external::arrow::datatypes::Field, rerun::external::arrow::array::ArrayRef)>> {
+        self.component.to_arrow()
+    }
+}
+
 #[derive(thiserror::Error, Debug, Clone)]
-pub enum LogContainerParsingError {
+pub enum LogContainerParsingError
+{
     #[error("Failed to parse shape to [usize; {}] due to {}", .0, .1)]
     ShapeParsingError(usize, String),
     #[error("Failed to tensor data to Vec<{}> due to {}", .0, .1)]
@@ -21,16 +34,8 @@ pub enum LogContainerParsingError {
     DimensionError(usize),
     #[error("Unable to parse tensor due to {}", .0)]
     RerunTensorParsingError(String),
-}
-
-impl<K: ?Sized + AsComponents> LogContainer<K> {
-    pub fn log_to_stream(
-        &self,
-        stream: &RecordingStream,
-        ent_path: impl Into<EntityPath>,
-    ) -> Result<(), RecordingStreamError> {
-        stream.log(ent_path, &self.component)
-    }
+    #[error("failed to convert from image due to {}", .0)]
+    ImageConstructionError(String),
 }
 
 fn get_val<IT: Copy, const ID: usize>(
@@ -181,3 +186,173 @@ impl_from_burn_tensore!(from_burn_tensoru64, u64);
 impl_from_burn_tensore!(from_burn_tensori16, i16);
 impl_from_burn_tensore!(from_burn_tensori32, i32);
 impl_from_burn_tensore!(from_burn_tensori64, i64);
+
+
+
+#[derive(Default)]
+pub enum ImageGrindOptions{
+    Columns(usize),
+    Rows(usize),
+    Exact{rows: usize, columns: usize},
+    #[default]
+    Auto,
+}
+
+impl LogContainer<rerun::Image>{
+    
+    /// Converts burn tesnor into a logcontainer that will log an image.
+    /// This function assumes the following u8 tensor shape: [height, width]
+    pub fn from_burn_2d_tensoru8<B: Backend>(burn_tensor: Tensor<B, 2, burn::tensor::Int>) -> Result<Self, LogContainerParsingError>{
+        
+        let tensor_data = burn_tensor.to_data();
+        let shape: Result<[usize; 2], _> = tensor_data.shape.clone().try_into();
+
+        if let Err(err) = shape {
+            return Err(LogContainerParsingError::ShapeParsingError(
+                2,
+                format!("{:?}", err),
+            ));
+        }
+        let shape = shape.unwrap();
+
+        let tensor_vec = tensor_data.into_vec::<i32>();
+
+        if let Err(err) = tensor_vec {
+            return Err(LogContainerParsingError::VecParsingError(
+                "i32".into(),
+                format!("{:?}", err),
+            ));
+        }
+        let tensor_vec = tensor_vec.unwrap();
+        
+        let ishape: [usize; 2] = [shape[0], shape[1]];
+        let nd = ndarray::Array2::<i32>::from_shape_fn(ishape, |n| {
+            let n = n.into();
+            get_val(&tensor_vec, &ishape, &n)
+        });
+        let image = rerun::Image::from_color_model_and_tensor(rerun::ColorModel::L, nd);
+        if let Err(err) = image{
+            return Err(LogContainerParsingError::ImageConstructionError(format!("{:?}", err)))
+        }
+        Ok(Self { component: image.unwrap() })
+    }
+
+    /// Converts burn tesnor into a logcontainer that will log an image.
+    /// This function assumes the following u8 tensor shape: [height, width, rgb_color/rbga_color]
+    pub fn from_burn_3d_tensoru8<B: Backend>(burn_tensor: Tensor<B, 3, burn::tensor::Int>) -> Result<Self, LogContainerParsingError>{
+        
+        let tensor_data = burn_tensor.to_data();
+        let shape: Result<[usize; 3], _> = tensor_data.shape.clone().try_into();
+
+        if let Err(err) = shape {
+            return Err(LogContainerParsingError::ShapeParsingError(
+                3,
+                format!("{:?}", err),
+            ));
+        }
+        let shape = shape.unwrap();
+
+        let tensor_vec: Result<Vec<i32>, _> = tensor_data.into_vec();
+
+        if let Err(err) = tensor_vec {
+            return Err(LogContainerParsingError::VecParsingError(
+                "i32".into(),
+                format!("{:?}", err),
+            ));
+        }
+        let tensor_vec = tensor_vec.unwrap();
+        
+        let ishape: [usize; 3] = [shape[0], shape[1], shape[2]];
+        let nd = ndarray::Array3::<i32>::from_shape_fn(ishape, |n| {
+            let n = n.into();
+            get_val(&tensor_vec, &ishape, &n)
+        });
+        let colors = ishape[2];
+        let image;
+        if colors == 3{
+            image = rerun::Image::from_color_model_and_tensor(rerun::ColorModel::RGB, nd);
+        }
+        else if colors == 4 {
+            image = rerun::Image::from_color_model_and_tensor(rerun::ColorModel::RGBA, nd);
+        }
+        else{
+            return Err(LogContainerParsingError::ImageConstructionError(format!("{} is not a valid option for the color channel! choose either 3 (rgb) or 4 (rgba)", colors)));
+        }
+        if let Err(err) = image{
+            return Err(LogContainerParsingError::ImageConstructionError(format!("{:?}", err)))
+        }
+        Ok(Self { component: image.unwrap() })
+    }
+
+    /// Converts burn tesnor into a logcontainer that will log an image.
+    /// This function assumes the following u8 tensor shape: [batch, height, width, rgb_color/rbga_color]
+    pub fn from_burn_4d_tensoru8<B: Backend>(burn_tensor: Tensor<B, 4, burn::tensor::Int>, grid_settings: ImageGrindOptions) -> Result<Self, LogContainerParsingError> {
+        let shape: [usize; 4] = burn_tensor.shape().dims();
+        let b = shape[0];
+    
+        if b == 0 {
+            let burn_tensor = burn_tensor.reshape([shape[1], shape[2], shape[3]]);
+            return Self::from_burn_3d_tensoru8(burn_tensor);
+        }
+    
+        let (rows, columns) = match grid_settings {
+            ImageGrindOptions::Columns(c) => {
+                let r = b as f32 / c as f32;
+                (r.floor() as usize + 1, c)
+            },
+            ImageGrindOptions::Rows(r) => {
+                let c = b as f32 / r as f32;
+                (r, c.floor() as usize + 1)
+            },
+            ImageGrindOptions::Exact { rows, columns } => {
+                if rows * columns < b {
+                    panic!("Invalid input! Make sure that {} x {} >= {}", rows, columns, b);
+                };
+                (rows, columns)
+            },
+            ImageGrindOptions::Auto => {
+                let root = (b as f32).sqrt();
+                if root % 1. == 0. {
+                    (root as usize, root as usize)
+                } else {
+                    ((root.floor() as usize + 1), root.floor() as usize)
+                }
+            },
+        };
+    
+        let height = rows * shape[1];
+        let width = columns * shape[2];
+        let mut stitched_tensor: Tensor<B, 3, burn::tensor::Int> = Tensor::zeros([height, width, shape[3]], &burn_tensor.device());
+    
+        for i in 0..b {
+            let row = i / columns;
+            let col = i % columns;
+            let start_row = row * shape[1];
+            let start_col = col * shape[2];
+            let end_row = start_row + shape[1];
+            let end_col = start_col + shape[2];
+    
+            let slice = burn_tensor.clone().slice([i..i+1, 0..shape[1], 0..shape[2], 0..shape[3]]);
+            let reshaped_slice = slice.reshape([shape[1], shape[2], shape[3]]);
+            stitched_tensor = stitched_tensor.slice_assign([start_row..end_row, start_col..end_col, 0..shape[3]], reshaped_slice);
+        }
+        Self::from_burn_3d_tensoru8(stitched_tensor)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use burn::backend::Wgpu;
+    use burn::tensor::Tensor;
+
+    #[test]
+    fn test_from_burn_2d_tensoru8() {
+        let tensor: Tensor<Wgpu, 2, burn::prelude::Int> = Tensor::from_data([
+                [1, 2], 
+                [3, 4]
+            ], &burn::backend::wgpu::WgpuDevice::default());
+        let log_container = LogContainer::from_burn_2d_tensoru8(tensor);
+        assert!(log_container.is_ok());
+    }
+}
