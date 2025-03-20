@@ -369,6 +369,38 @@ pub enum ImageGrindOptions {
     Auto,
 }
 
+impl ImageGrindOptions {
+    fn into_row_column(self, batch_size: usize) -> (usize, usize){
+        match self {
+            ImageGrindOptions::Columns(c) => {
+                let r = batch_size as f32 / c as f32;
+                (r.floor() as usize + 1, c)
+            }
+            ImageGrindOptions::Rows(r) => {
+                let c = batch_size as f32 / r as f32;
+                (r, c.floor() as usize + 1)
+            }
+            ImageGrindOptions::Exact { rows, columns } => {
+                if rows * columns < batch_size {
+                    panic!(
+                        "Invalid input! Make sure that {} x {} >= {}",
+                        rows, columns, batch_size
+                    );
+                };
+                (rows, columns)
+            }
+            ImageGrindOptions::Auto => {
+                let root = (batch_size as f32).sqrt();
+                if root % 1. == 0. {
+                    (root as usize, root as usize)
+                } else {
+                    ((root.floor() as usize + 1), root.round() as usize)
+                }
+            }
+        }
+    }
+}
+
 impl LogContainer<rerun::Image> {
     /// Converts burn tesnor into a logcontainer that will log an image.
     /// This function assumes the following u8 tensor shape: [height, width]
@@ -490,33 +522,7 @@ impl LogContainer<rerun::Image> {
             return Self::from_burn_3d_tensoru8(burn_tensor);
         }
 
-        let (rows, columns) = match grid_settings {
-            ImageGrindOptions::Columns(c) => {
-                let r = b as f32 / c as f32;
-                (r.floor() as usize + 1, c)
-            }
-            ImageGrindOptions::Rows(r) => {
-                let c = b as f32 / r as f32;
-                (r, c.floor() as usize + 1)
-            }
-            ImageGrindOptions::Exact { rows, columns } => {
-                if rows * columns < b {
-                    panic!(
-                        "Invalid input! Make sure that {} x {} >= {}",
-                        rows, columns, b
-                    );
-                };
-                (rows, columns)
-            }
-            ImageGrindOptions::Auto => {
-                let root = (b as f32).sqrt();
-                if root % 1. == 0. {
-                    (root as usize, root as usize)
-                } else {
-                    ((root.floor() as usize + 1), root.floor() as usize)
-                }
-            }
-        };
+        let (rows, columns) = grid_settings.into_row_column(b);
 
         let height = rows * h;
         let width = columns * w;
@@ -566,4 +572,26 @@ mod tests {
         let log_container = LogContainer::from_burn_4d_tensoru8(tensor, ImageGrindOptions::Auto);
         assert!(log_container.is_ok());
     }
+    #[test]
+    fn test_auto_batch_size_2(){
+        let grid = ImageGrindOptions::Auto;
+        let (rows, columns) = grid.into_row_column(2);
+        assert_eq!(rows, 2);
+        assert_eq!(columns, 1);
+    }
+    #[test]
+    fn test_auto_batch_size_3(){
+        let grid = ImageGrindOptions::Auto;
+        let (rows, columns) = grid.into_row_column(3);
+        assert_eq!(rows, 2);
+        assert_eq!(columns, 2);
+    }
+    #[test]
+    fn test_auto_batch_size_4(){
+        let grid = ImageGrindOptions::Auto;
+        let (rows, columns) = grid.into_row_column(4);
+        assert_eq!(rows, 2);
+        assert_eq!(columns, 2);
+    }
+
 }
