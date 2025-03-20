@@ -124,7 +124,7 @@ impl<B: Backend> Pix2PixModel<B> {
             // IMPORTANT the discriminator should not be included in autograd path.
             .clone()
             .no_grad()
-            .forward(generated_sketches.clone(), item.sketches.clone());
+            .forward(generated_sketches.clone(), item.photos.clone().detach());
         let loss_d_real = self.mse_loss.forward(
             real_result.clone(),
             Tensor::ones_like(&real_result),
