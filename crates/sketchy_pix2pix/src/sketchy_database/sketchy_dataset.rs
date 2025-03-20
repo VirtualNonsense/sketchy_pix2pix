@@ -591,6 +591,16 @@ impl SketchyDataset {
             },
         )
     }
+    pub fn filter<P>(self, mut predicate: P) -> Self 
+    where 
+        P: FnMut(&SketchyItem) -> bool
+    {
+        Self{
+            name: self.name.clone(),
+            items: self.items.iter().filter(|item| predicate(item)).cloned().collect()
+        }
+    }
+
 }
 
 // Implementierung des Burn Dataset-Traits
