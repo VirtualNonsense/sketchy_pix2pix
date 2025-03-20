@@ -6,7 +6,7 @@ use burn::{
     nn::loss::{BinaryCrossEntropyLoss, BinaryCrossEntropyLossConfig, MseLoss},
     optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
-    tensor::{Tensor, Transaction, backend::AutodiffBackend, cast::ToElement},
+    tensor::{Tensor, Transaction, backend::AutodiffBackend},
     train::{
         TrainOutput, TrainStep, ValidStep,
         metric::{Adaptor, ItemLazy, LossInput},
@@ -14,14 +14,13 @@ use burn::{
 };
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use rerun::RecordingStream;
 
 use crate::{
     sketchy_database::{
         sketchy_batcher::{SketchyBatch, SketchyBatcher},
-        sketchy_dataset::{PhotoAugmentation, SketchAugmentation, SketchyDataset},
+        sketchy_dataset::{PhotoAugmentation, SketchAugmentation, SketchyClass, SketchyDataset},
     },
-    util::{ImageGrindOptions, LogContainer},
+    logging::SketchyGanLogger,
 };
 
 use super::{
@@ -58,20 +57,20 @@ pub struct Pix2PixModel<B: Backend> {
 pub struct GanOutput<B: Backend> {
     /// real sketches
     /// dim [N, C, 256, 256]
-    train_sketches: Tensor<B, 4>,
+    pub train_sketches: Tensor<B, 4>,
     /// generated sketches
     /// dim [N, C, 256, 256]
-    fake_sketches: Tensor<B, 4>,
+    pub fake_sketches: Tensor<B, 4>,
     /// discriminator result of real sketches
     /// dim [N, 1, 16, 16]
-    real_sketch_output: Tensor<B, 4>,
+    pub real_sketch_output: Tensor<B, 4>,
     /// discriminator result of fake sketches
     /// dim [N, 1, 16, 16]
-    fake_sketch_output: Tensor<B, 4>,
+    pub fake_sketch_output: Tensor<B, 4>,
     /// loss of discriminator
-    loss_discriminator: Tensor<B, 2>,
+    pub loss_discriminator: Tensor<B, 2>,
     /// loss of generator
-    loss_generator: Tensor<B, 2>,
+    pub loss_generator: Tensor<B, 2>,
 }
 
 impl<B: Backend> ItemLazy for GanOutput<B> {
@@ -220,17 +219,12 @@ fn create_artifact_dir(artifact_dir: &str) {
     std::fs::create_dir_all(artifact_dir).ok();
 }
 
-fn convert_to_picture<B: Backend>(image_tensor: Tensor<B, 4>) -> Tensor<B, 4, Int> {
-    let image_tensor = image_tensor * 127.5 + 127.5;
-    let image_tensor = image_tensor.int();
-    image_tensor.permute([0, 2, 3, 1])
-}
 
 pub fn train_gan<B: AutodiffBackend>(
     artifact_dir: &str,
     config: TrainingConfig,
     device: B::Device,
-    log: RecordingStream,
+    log: SketchyGanLogger,
 ) {
     create_artifact_dir(artifact_dir);
     config
@@ -256,7 +250,7 @@ pub fn train_gan<B: AutodiffBackend>(
     )
     .expect("");
 
-    let (train, valid) = data.split(0.8);
+    let (train, valid) = data.filter(|item| item.sketch_class == SketchyClass::Penguin).split(0.8);
 
     let train_size = train.len();
     let valid_size = valid.len();
@@ -285,10 +279,7 @@ pub fn train_gan<B: AutodiffBackend>(
     let epoch_bar = m.add(ProgressBar::new(config.num_epochs as u64));
     epoch_bar.set_style(sty.clone());
     epoch_bar.set_message("Epochs");
-    let imgae_grid_options = ImageGrindOptions::default();
 
-    // Iterate over our training and validation loop for X epochs.
-    let log_image_interval = 10;
     for _epoch in 1..config.num_epochs + 1 {
         epoch_bar.inc(1);
 
@@ -312,134 +303,7 @@ pub fn train_gan<B: AutodiffBackend>(
             let grad_d_param = GradientsParams::from_grads(grad_d, &model.discriminator);
             let grad_g_param = GradientsParams::from_grads(grad_g, &model.generator);
 
-            if iteration % log_image_interval == 0 {
-                match LogContainer::from_burn_4d_tensoru8(
-                    convert_to_picture(output.real_sketch_output),
-                    imgae_grid_options.clone(),
-                ) {
-                    Ok(c) => {
-                        let _ = log.log("raw/real_result", &c);
-                    }
-                    Err(e) => {
-                        let _ = log.log(
-                            "raw/real_result",
-                            &rerun::TextLog::new(format!(
-                                "Failed to convert input real_sketch_output due to {:?}",
-                                e
-                            ))
-                            .with_level(rerun::TextLogLevel::ERROR),
-                        );
-                    }
-                }
-                match LogContainer::from_burn_4d_tensoru8(
-                    convert_to_picture(output.fake_sketch_output),
-                    imgae_grid_options.clone(),
-                ) {
-                    Ok(c) => {
-                        let _ = log.log("raw/fake_result", &c);
-                    }
-                    Err(e) => {
-                        let _ = log.log(
-                            "raw/fake_result",
-                            &rerun::TextLog::new(format!(
-                                "Failed to convert input fake_sketch_output due to {:?}",
-                                e
-                            ))
-                            .with_level(rerun::TextLogLevel::ERROR),
-                        );
-                    }
-                }
-
-                match LogContainer::from_burn_4d_tensoru8(
-                    convert_to_picture(photos),
-                    imgae_grid_options.clone(),
-                ) {
-                    Ok(c) => match log.log("imges/input_images", &c) {
-                        Ok(_) => (),
-                        _ => {}
-                    },
-                    Err(e) => {
-                        let _ = log.log(
-                            "imges/input_images",
-                            &rerun::TextLog::new(format!(
-                                "Failed to convert input photos due to {:?}",
-                                e
-                            ))
-                            .with_level(rerun::TextLogLevel::ERROR),
-                        );
-                    }
-                }
-                match LogContainer::from_burn_4d_tensoru8(
-                    convert_to_picture(output.train_sketches),
-                    imgae_grid_options.clone(),
-                ) {
-                    Ok(c) => {
-                        let _ = log.log("imges/real_sketches", &c);
-                    }
-                    Err(e) => {
-                        let _ = log.log(
-                            "imges/real_sketches",
-                            &rerun::TextLog::new(format!(
-                                "Failed to convert train_sketches due to {:?}",
-                                e
-                            ))
-                            .with_level(rerun::TextLogLevel::ERROR),
-                        );
-                    }
-                }
-                match LogContainer::from_burn_4d_tensoru8(
-                    convert_to_picture(output.fake_sketches),
-                    imgae_grid_options.clone(),
-                ) {
-                    Ok(c) => {
-                        let _ = log.log("imges/fake_sketches", &c);
-                    }
-                    Err(e) => {
-                        let _ = log.log(
-                            "imges/fake_sketches",
-                            &rerun::TextLog::new(format!(
-                                "Failed to convert fake_sketches due to {:?}",
-                                e
-                            ))
-                            .with_level(rerun::TextLogLevel::ERROR),
-                        );
-                    }
-                }
-            }
-            let gen_loss = loss_g.mean().into_scalar().to_f64();
-            let dis_loss = loss_d.mean().into_scalar().to_f64();
-            if output.loss_generator.shape().dims::<2>()[0] > 1 {
-                let loss = output.loss_generator.mean_dim(1).squeeze::<1>(1);
-                let loss = loss.to_data().to_vec::<f32>();
-                if let Ok(c) = loss {
-                    for (i, val) in c.iter().enumerate() {
-                        let _ = log.log(
-                            format!("graphs/training/loss/generator/component_{}", i),
-                            &rerun::Scalar::new(*val as f64),
-                        );
-                    }
-                }
-            }
-            if output.loss_discriminator.shape().dims::<2>()[0] > 1 {
-                let loss = output.loss_discriminator.mean_dim(1).squeeze::<1>(1);
-                let loss = loss.to_data().to_vec::<f32>();
-                if let Ok(c) = loss {
-                    for (i, val) in c.iter().enumerate() {
-                        let _ = log.log(
-                            format!("graphs/training/loss/discriminator/component_{}", i),
-                            &rerun::Scalar::new(*val as f64),
-                        );
-                    }
-                }
-            }
-            let _ = log.log(
-                "graphs/training/loss/generator/mean",
-                &rerun::Scalar::new(gen_loss),
-            );
-            let _ = log.log(
-                "graphs/training/loss/discriminator/mean",
-                &rerun::Scalar::new(dis_loss),
-            );
+            log.log_progress(photos, output, "training", iteration);
 
             model.discriminator = opt_discriminator.step(
                 config.discriminator_learning_rate,
@@ -451,12 +315,6 @@ pub fn train_gan<B: AutodiffBackend>(
                 model.generator,
                 grad_g_param,
             );
-
-            training_bar.set_message(format!(
-                "Training - gen loss: {:.3e}, dis loss: {:.3e}",
-                gen_loss, dis_loss
-            ));
-
             training_bar.inc(config.batch_size as u64);
         }
         m.remove(&training_bar);
@@ -467,13 +325,10 @@ pub fn train_gan<B: AutodiffBackend>(
         valid_bar.set_style(sty.clone());
         valid_bar.set_message("Valid Progress");
         // Implement our validation loop.
-        for (_iteration, batch) in dataloader_test.iter().enumerate() {
-            let output = model_valid.forward_training(batch);
-            valid_bar.set_message(format!(
-                "Valid - gen loss: {:.3e}, dis loss: {:.3e}",
-                output.loss_generator.mean().into_scalar().to_f64(),
-                output.loss_discriminator.mean().into_scalar().to_f64()
-            ));
+        for (iteration, batch) in dataloader_test.iter().enumerate() {
+            let output = model_valid.forward_training(batch.clone());
+            
+            log.log_progress(batch.photos, output, "validation", iteration);
             valid_bar.inc(config.batch_size as u64);
         }
         m.remove(&valid_bar);

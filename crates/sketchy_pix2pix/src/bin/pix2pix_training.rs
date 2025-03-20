@@ -1,6 +1,6 @@
 
 use burn::{backend::{Autodiff, Wgpu}, optim::AdamConfig};
-use sketchy_pix2pix::pix2pix::{discriminator::Pix2PixDescriminatorConfig, gan::{train_gan, Pix2PixModelConfig, TrainingConfig}, generator::Pix2PixGeneratorConfig};
+use sketchy_pix2pix::{logging::SketchyGanLogger, pix2pix::{discriminator::Pix2PixDescriminatorConfig, gan::{train_gan, Pix2PixModelConfig, TrainingConfig}, generator::Pix2PixGeneratorConfig}};
 
 
 fn main() -> Result<(), Box<dyn std::error::Error>>{
@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{
     let device = burn::backend::wgpu::WgpuDevice::default();
     let artifact_dir = "./tmp";
 
-    let rec = rerun::RecordingStreamBuilder::new("train sketchy gan").spawn()?;
+    let rec = SketchyGanLogger::new(rerun::RecordingStreamBuilder::new("train sketchy gan").spawn()?);
 
 
     train_gan::<MyAutodiffBackend>(
