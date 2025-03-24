@@ -406,7 +406,7 @@ pub enum SketchyDatasetError {
     RonSerializationError(#[from] ron::error::Error),
 }
 
-#[derive(Serialize, Deserialize, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SketchyDataset {
     name: String,
     items: Vec<SketchyItem>,
