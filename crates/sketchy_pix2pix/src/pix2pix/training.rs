@@ -60,10 +60,6 @@ pub struct TrainingConfig {
     pub discriminator_learning_rate: f64,
     #[config(default = 0.002)]
     pub generator_learning_rate: f64,
-    #[config(default = 2)]
-    pub mini_batch_discriminator: usize,
-    #[config(default = 2)]
-    pub mini_batch_generator: usize,
     pub train_data: TrainDataConfig,
 }
 
