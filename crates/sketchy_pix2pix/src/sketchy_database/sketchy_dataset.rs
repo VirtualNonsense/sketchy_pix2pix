@@ -14,6 +14,7 @@ use std::{
 use thiserror::Error;
 use walkdir::WalkDir;
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub enum PhotoAugmentation {
     /// image is non-uniformly scaled to 256x256
     Normal,
@@ -33,6 +34,7 @@ impl PhotoAugmentation {
     }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq)]
 pub enum SketchAugmentation {
     /// sketch canvas is rendered to 256x256
     /// such that it undergoes the same

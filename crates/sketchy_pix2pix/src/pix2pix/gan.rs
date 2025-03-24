@@ -1,12 +1,6 @@
-use std::path::Path;
-
 use burn::{
-    data::{dataloader::DataLoaderBuilder, dataset::Dataset},
-    module::AutodiffModule,
     nn::loss::{BinaryCrossEntropyLoss, BinaryCrossEntropyLossConfig, MseLoss},
-    optim::{AdamConfig, GradientsParams, Optimizer},
     prelude::*,
-    record::FileRecorder,
     tensor::{Tensor, Transaction, backend::AutodiffBackend},
     train::{
         TrainOutput, TrainStep, ValidStep,
@@ -14,15 +8,7 @@ use burn::{
     },
 };
 
-use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-
-use crate::{
-    logging::SketchyGanLogger,
-    sketchy_database::{
-        sketchy_batcher::{SketchyBatch, SketchyBatcher},
-        sketchy_dataset::{PhotoAugmentation, SketchAugmentation, SketchyClass, SketchyDataset},
-    },
-};
+use crate::sketchy_database::sketchy_batcher::SketchyBatch;
 
 use super::{
     discriminator::{Pix2PixDescriminatorConfig, Pix2PixDiscriminator},
@@ -31,8 +17,8 @@ use super::{
 
 #[derive(Config, Debug)]
 pub struct Pix2PixModelConfig {
-    discriminator_config: Pix2PixDescriminatorConfig,
-    generator_config: Pix2PixGeneratorConfig,
+    pub discriminator_config: Pix2PixDescriminatorConfig,
+    pub generator_config: Pix2PixGeneratorConfig,
 }
 
 impl Pix2PixModelConfig {
@@ -48,10 +34,10 @@ impl Pix2PixModelConfig {
 
 #[derive(Module, Debug)]
 pub struct Pix2PixModel<B: Backend> {
-    discriminator: Pix2PixDiscriminator<B>,
-    generator: Pix2PixGenerator<B>,
-    mse_loss: MseLoss,
-    bce_loss: BinaryCrossEntropyLoss<B>,
+    pub discriminator: Pix2PixDiscriminator<B>,
+    pub generator: Pix2PixGenerator<B>,
+    pub mse_loss: MseLoss,
+    pub bce_loss: BinaryCrossEntropyLoss<B>,
 }
 
 #[derive(Debug)]
@@ -192,157 +178,4 @@ impl<B: Backend> Adaptor<LossInput<B>> for GanOutput<B> {
         let loss_mean = self.loss_discriminator.clone().mean_dim(0).squeeze(0);
         LossInput::new(loss_mean)
     }
-}
-
-#[derive(Config)]
-pub struct TrainingConfig {
-    pub model: Pix2PixModelConfig,
-    pub optimizer_discriminator: AdamConfig,
-    pub optimizer_generator: AdamConfig,
-    #[config(default = 100)]
-    pub num_epochs: usize,
-    #[config(default = 4)]
-    pub batch_size: usize,
-    #[config(default = 10)]
-    pub num_workers: usize,
-    #[config(default = 42)]
-    pub seed: u64,
-    #[config(default = 0.002)]
-    pub discriminator_learning_rate: f64,
-    #[config(default = 0.002)]
-    pub generator_learning_rate: f64,
-    #[config(default = 2)]
-    pub mini_batch_discriminator: usize,
-    #[config(default = 2)]
-    pub mini_batch_generator: usize,
-}
-
-fn create_artifact_dir(artifact_dir: &str) {
-    // Remove existing artifacts before to get an accurate learner summary
-    std::fs::remove_dir_all(artifact_dir).ok();
-    std::fs::create_dir_all(artifact_dir).ok();
-}
-
-pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
-    artifact_dir: &str,
-    config: TrainingConfig,
-    device: B::Device,
-    log: SketchyGanLogger,
-    recorder: R,
-) {
-    create_artifact_dir(artifact_dir);
-    config
-        .save(format!("{artifact_dir}/config.json"))
-        .expect("Config should be saved successfully");
-
-    B::seed(config.seed);
-
-    let batcher_train = SketchyBatcher::<B>::new(device.clone());
-    let batcher_valid = SketchyBatcher::<B::InnerBackend>::new(device.clone());
-
-    let photo_path = Path::new("./data/sketchydb_256x256/256x256/photo/");
-
-    let sketch_path = Path::new("./data/sketchydb_256x256/256x256/sketch/");
-
-    let mut model = config.model.init::<B>(&device);
-
-    let data = SketchyDataset::new(
-        photo_path,
-        sketch_path,
-        PhotoAugmentation::ScaledAndCentered,
-        SketchAugmentation::ScaledAndCentered,
-    )
-    .expect("");
-
-    let (train, valid) = data
-        .filter(|item| item.sketch_class == SketchyClass::Penguin)
-        .split(0.8);
-
-    let train_size = train.len();
-    let valid_size = valid.len();
-
-    let mut opt_discriminator = config.optimizer_discriminator.init();
-    let mut opt_generator = config.optimizer_generator.init();
-
-    let dataloader_train = DataLoaderBuilder::new(batcher_train)
-        .batch_size(config.batch_size)
-        .shuffle(config.seed)
-        .num_workers(config.num_workers)
-        .build(train);
-
-    let dataloader_test = DataLoaderBuilder::new(batcher_valid)
-        .batch_size(config.batch_size)
-        .shuffle(config.seed)
-        .num_workers(config.num_workers)
-        .build(valid);
-
-    let m = MultiProgress::new();
-    let sty = ProgressStyle::with_template(
-        "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
-    )
-    .unwrap()
-    .progress_chars("##-");
-    let epoch_bar = m.add(ProgressBar::new(config.num_epochs as u64));
-    epoch_bar.set_style(sty.clone());
-    epoch_bar.set_message("Epochs");
-    let checkpoint_rotate = 10;
-
-    for epoch in 1..config.num_epochs + 1 {
-        epoch_bar.inc(1);
-
-        let training_bar = m.add(ProgressBar::new(train_size as u64));
-        training_bar.set_style(sty.clone());
-        training_bar.set_message("Training:");
-        // Implement our training loop.
-        for (iteration, batch) in dataloader_train.iter().enumerate() {
-            let photos = batch.photos.clone();
-            let output = model.forward_training(batch);
-            let loss_d = output
-                .loss_discriminator
-                .clone()
-                .mean_dim(0)
-                .squeeze::<1>(0);
-            let loss_g = output.loss_generator.clone().mean_dim(0).squeeze::<1>(0);
-
-            let grad_d = loss_d.clone().backward();
-            let grad_g = loss_g.clone().backward();
-
-            let grad_d_param = GradientsParams::from_grads(grad_d, &model.discriminator);
-            let grad_g_param = GradientsParams::from_grads(grad_g, &model.generator);
-
-            log.log_progress(photos, output, "training", iteration);
-
-            model.discriminator = opt_discriminator.step(
-                config.discriminator_learning_rate,
-                model.discriminator,
-                grad_d_param,
-            );
-            model.generator = opt_generator.step(
-                config.generator_learning_rate,
-                model.generator,
-                grad_g_param,
-            );
-            training_bar.inc(config.batch_size as u64);
-        }
-        m.remove(&training_bar);
-        let _save_result = model
-            .clone()
-            .save_file(format!("{}/checkpoints/model_{:03}", &artifact_dir, epoch % checkpoint_rotate), &recorder);
-        // Get the model without autodiff.
-        let model_valid = model.valid();
-
-        let valid_bar = m.add(ProgressBar::new(valid_size as u64));
-        valid_bar.set_style(sty.clone());
-        valid_bar.set_message("Valid Progress");
-        // Implement our validation loop.
-        for (iteration, batch) in dataloader_test.iter().enumerate() {
-            let output = model_valid.forward_training(batch.clone());
-            
-            log.log_progress(batch.photos, output, "validation", iteration);
-            valid_bar.inc(config.batch_size as u64);
-        }
-        m.remove(&valid_bar);
-    }
-
-    let _save_result = model.save_file(format!("{}/trained", &artifact_dir), &recorder);
 }

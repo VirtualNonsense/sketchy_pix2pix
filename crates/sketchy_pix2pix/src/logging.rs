@@ -26,7 +26,7 @@ impl SketchyGanLogger {
     pub fn new(stream: RecordingStream) -> Self {
         Self {
             stream,
-            log_image_interval: 5,
+            log_image_interval: 25,
             image_grid_options: ImageGrindOptions::Auto,
         }
     }
