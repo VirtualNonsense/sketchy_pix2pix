@@ -45,7 +45,7 @@ impl SketchyGanLogger {
             .squeeze::<1>(0);
         let loss_g = output.loss_generator.clone().mean_dim(0).squeeze::<1>(0);
         if batch % self.log_image_interval == 0 {
-            match LogContainer::from_burn_4d_tensoru8(
+            match LogAble::from_burn_4d_tensoru8(
                 convert_to_picture(output.real_sketch_output),
                 self.image_grid_options.clone(),
             ) {
@@ -63,7 +63,7 @@ impl SketchyGanLogger {
                     );
                 }
             }
-            match LogContainer::from_burn_4d_tensoru8(
+            match LogAble::from_burn_4d_tensoru8(
                 convert_to_picture(output.fake_sketch_output),
                 self.image_grid_options.clone(),
             ) {
@@ -82,7 +82,7 @@ impl SketchyGanLogger {
                 }
             }
 
-            match LogContainer::from_burn_4d_tensoru8(
+            match LogAble::from_burn_4d_tensoru8(
                 convert_to_picture(photos),
                 self.image_grid_options.clone(),
             ) {
@@ -101,7 +101,7 @@ impl SketchyGanLogger {
                     );
                 }
             }
-            match LogContainer::from_burn_4d_tensoru8(
+            match LogAble::from_burn_4d_tensoru8(
                 convert_to_picture(output.train_sketches),
                 self.image_grid_options.clone(),
             ) {
@@ -119,7 +119,7 @@ impl SketchyGanLogger {
                     );
                 }
             }
-            match LogContainer::from_burn_4d_tensoru8(
+            match LogAble::from_burn_4d_tensoru8(
                 convert_to_picture(output.fake_sketches),
                 self.image_grid_options.clone(),
             ) {
@@ -174,11 +174,11 @@ impl SketchyGanLogger {
         );
     }
 }
-pub struct LogContainer<K: ?Sized + AsComponents> {
+pub struct LogAble<K: ?Sized + AsComponents> {
     component: K,
 }
 
-impl<K: ?Sized + AsComponents> AsComponents for LogContainer<K> {
+impl<K: ?Sized + AsComponents> AsComponents for LogAble<K> {
     fn as_serialized_batches(&self) -> Vec<rerun::SerializedComponentBatch> {
         self.component.as_serialized_batches()
     }
@@ -195,7 +195,7 @@ impl<K: ?Sized + AsComponents> AsComponents for LogContainer<K> {
 }
 
 #[derive(thiserror::Error, Debug, Clone)]
-pub enum LogContainerParsingError {
+pub enum LogAbleParsingError {
     #[error("Failed to parse shape to [usize; {}] due to {}", .0, .1)]
     ShapeParsingError(usize, String),
     #[error("Failed to tensor data to Vec<{}> due to {}", .0, .1)]
@@ -226,16 +226,16 @@ fn get_val<IT: Copy, const ID: usize>(
 
 macro_rules! impl_from_burn_tensore {
     ($function_name:ident, $d_ty:ty) => {
-        impl LogContainer<rerun::Tensor> {
+        impl LogAble<rerun::Tensor> {
             pub fn $function_name<B: Backend, const D: usize, K: BasicOps<B>>(
                 burn_tensor: Tensor<B, D, K>,
                 dim_label: [&str; D],
-            ) -> Result<Self, LogContainerParsingError> {
+            ) -> Result<Self, LogAbleParsingError> {
                 let tensor_data = burn_tensor.to_data();
                 let shape: Result<[usize; D], _> = tensor_data.shape.clone().try_into();
 
                 if let Err(err) = shape {
-                    return Err(LogContainerParsingError::ShapeParsingError(
+                    return Err(LogAbleParsingError::ShapeParsingError(
                         D,
                         format!("{:?}", err),
                     ));
@@ -245,7 +245,7 @@ macro_rules! impl_from_burn_tensore {
                 let tensor_vec: Result<Vec<$d_ty>, _> = tensor_data.into_vec();
 
                 if let Err(err) = tensor_vec {
-                    return Err(LogContainerParsingError::VecParsingError(
+                    return Err(LogAbleParsingError::VecParsingError(
                         stringify!($d_ty).into(),
                         format!("{:?}", err),
                     ));
@@ -260,7 +260,7 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogContainerParsingError::RerunTensorParsingError(
+                            return Err(LogAbleParsingError::RerunTensorParsingError(
                                 format!("{:?}", err),
                             ));
                         }
@@ -274,7 +274,7 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogContainerParsingError::RerunTensorParsingError(
+                            return Err(LogAbleParsingError::RerunTensorParsingError(
                                 format!("{:?}", err),
                             ));
                         }
@@ -288,7 +288,7 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogContainerParsingError::RerunTensorParsingError(
+                            return Err(LogAbleParsingError::RerunTensorParsingError(
                                 format!("{:?}", err),
                             ));
                         }
@@ -302,7 +302,7 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogContainerParsingError::RerunTensorParsingError(
+                            return Err(LogAbleParsingError::RerunTensorParsingError(
                                 format!("{:?}", err),
                             ));
                         }
@@ -316,7 +316,7 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogContainerParsingError::RerunTensorParsingError(
+                            return Err(LogAbleParsingError::RerunTensorParsingError(
                                 format!("{:?}", err),
                             ));
                         }
@@ -331,14 +331,14 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogContainerParsingError::RerunTensorParsingError(
+                            return Err(LogAbleParsingError::RerunTensorParsingError(
                                 format!("{:?}", err),
                             ));
                         }
                         t.unwrap().with_dim_names(dim_label)
                     }
                     d => {
-                        return Err(LogContainerParsingError::DimensionError(d));
+                        return Err(LogAbleParsingError::DimensionError(d));
                     }
                 };
                 Ok(Self { component: t })
@@ -401,17 +401,17 @@ impl ImageGrindOptions {
     }
 }
 
-impl LogContainer<rerun::Image> {
+impl LogAble<rerun::Image> {
     /// Converts burn tesnor into a logcontainer that will log an image.
     /// This function assumes the following u8 tensor shape: [height, width]
     pub fn from_burn_2d_tensoru8<B: Backend>(
         burn_tensor: Tensor<B, 2, burn::tensor::Int>,
-    ) -> Result<Self, LogContainerParsingError> {
+    ) -> Result<Self, LogAbleParsingError> {
         let tensor_data = burn_tensor.to_data();
         let shape: Result<[usize; 2], _> = tensor_data.shape.clone().try_into();
 
         if let Err(err) = shape {
-            return Err(LogContainerParsingError::ShapeParsingError(
+            return Err(LogAbleParsingError::ShapeParsingError(
                 2,
                 format!("{:?}", err),
             ));
@@ -421,7 +421,7 @@ impl LogContainer<rerun::Image> {
         let tensor_vec = tensor_data.into_vec::<i32>();
 
         if let Err(err) = tensor_vec {
-            return Err(LogContainerParsingError::VecParsingError(
+            return Err(LogAbleParsingError::VecParsingError(
                 "i32".into(),
                 format!("{:?}", err),
             ));
@@ -435,7 +435,7 @@ impl LogContainer<rerun::Image> {
         });
         let image = rerun::Image::from_color_model_and_tensor(rerun::ColorModel::L, nd);
         if let Err(err) = image {
-            return Err(LogContainerParsingError::ImageConstructionError(format!(
+            return Err(LogAbleParsingError::ImageConstructionError(format!(
                 "{:?}",
                 err
             )));
@@ -449,12 +449,12 @@ impl LogContainer<rerun::Image> {
     /// This function assumes the following u8 tensor shape: [height, width, rgb_color/rbga_color]
     pub fn from_burn_3d_tensoru8<B: Backend>(
         burn_tensor: Tensor<B, 3, burn::tensor::Int>,
-    ) -> Result<Self, LogContainerParsingError> {
+    ) -> Result<Self, LogAbleParsingError> {
         let tensor_data = burn_tensor.to_data();
         let shape: Result<[usize; 3], _> = tensor_data.shape.clone().try_into();
 
         if let Err(err) = shape {
-            return Err(LogContainerParsingError::ShapeParsingError(
+            return Err(LogAbleParsingError::ShapeParsingError(
                 3,
                 format!("{:?}", err),
             ));
@@ -468,7 +468,7 @@ impl LogContainer<rerun::Image> {
         let tensor_vec: Result<Vec<i32>, _> = tensor_data.into_vec();
 
         if let Err(err) = tensor_vec {
-            return Err(LogContainerParsingError::VecParsingError(
+            return Err(LogAbleParsingError::VecParsingError(
                 "i32".into(),
                 format!("{:?}", err),
             ));
@@ -489,13 +489,13 @@ impl LogContainer<rerun::Image> {
         } else if c == 4 {
             image = rerun::Image::from_color_model_and_tensor(rerun::ColorModel::RGBA, nd);
         } else {
-            return Err(LogContainerParsingError::ImageConstructionError(format!(
+            return Err(LogAbleParsingError::ImageConstructionError(format!(
                 "{} is not a valid option for the color channel! choose either 1 (L), 3 (rgb) or 4 (rgba)",
                 c
             )));
         }
         if let Err(err) = image {
-            return Err(LogContainerParsingError::ImageConstructionError(format!(
+            return Err(LogAbleParsingError::ImageConstructionError(format!(
                 "{:?}",
                 err
             )));
@@ -510,7 +510,7 @@ impl LogContainer<rerun::Image> {
     pub fn from_burn_4d_tensoru8<B: Backend>(
         burn_tensor: Tensor<B, 4, burn::tensor::Int>,
         grid_settings: ImageGrindOptions,
-    ) -> Result<Self, LogContainerParsingError> {
+    ) -> Result<Self, LogAbleParsingError> {
         let shape: [usize; 4] = burn_tensor.shape().dims();
         let b = shape[0];
         let h = shape[1];
@@ -560,7 +560,7 @@ mod tests {
             [[1, 2], [3, 4]],
             &burn::backend::wgpu::WgpuDevice::default(),
         );
-        let log_container = LogContainer::from_burn_2d_tensoru8(tensor);
+        let log_container = LogAble::from_burn_2d_tensoru8(tensor);
         assert!(log_container.is_ok());
     }
     #[test]
@@ -569,7 +569,7 @@ mod tests {
             [[[[1], [2]], [[3], [4]]], [[[5], [6]], [[7], [8]]]],
             &burn::backend::wgpu::WgpuDevice::default(),
         );
-        let log_container = LogContainer::from_burn_4d_tensoru8(tensor, ImageGrindOptions::Auto);
+        let log_container = LogAble::from_burn_4d_tensoru8(tensor, ImageGrindOptions::Auto);
         assert!(log_container.is_ok());
     }
     #[test]
