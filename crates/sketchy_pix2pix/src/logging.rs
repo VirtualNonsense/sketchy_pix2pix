@@ -200,7 +200,7 @@ impl SketchyGanLogger {
         macro_rules! log_grad {
             ($name:ident, $grad_test:expr) => {
                 if let Some(grad) = $grad_test {
-                    if let Ok(comp) = LogAble::from_burn_tensorf32(grad.mean_dim(0), ["out_channel", "in_channel",  "height", "width"]) {
+                    if let Ok(comp) = LogAble::from_burn_tensorf32(grad.mean_dim(2).mean_dim(3), ["out_channel", "in_channel",  "row", "column"]) {
                         let _ = self.stream.log(
                             format!("gradient/discriminator/{}", stringify!($name)),
                             &comp,
@@ -228,32 +228,32 @@ impl SketchyGanLogger {
 
 
         macro_rules! log_grad {
-            ($name:ident, $grad_test:expr) => {
+            ($block:ident, $name:ident, $grad_test:expr) => {
                 if let Some(grad) = $grad_test {
-                    if let Ok(comp) = LogAble::from_burn_tensorf32(grad.mean_dim(0), ["out_channel", "in_channel",  "height", "width"]) {
+                    if let Ok(comp) = LogAble::from_burn_tensorf32(grad.mean_dim(2).mean_dim(3), ["out_channel", "in_channel",  "row", "column"]) {
                         let _ = self
                             .stream
-                            .log(format!("gradient/generator/{}", stringify!($name)), &comp);
+                            .log(format!("gradient/generator/{}/{}", stringify!($block), stringify!($name)), &comp);
                     }
                 }
             };
         }
-        log_grad!(enc_conv1, gen_grad.enc_conv1);
-        log_grad!(enc_conv2, gen_grad.enc_conv2);
-        log_grad!(enc_conv3, gen_grad.enc_conv3);
-        log_grad!(enc_conv4, gen_grad.enc_conv4);
-        log_grad!(enc_conv5, gen_grad.enc_conv5);
-        log_grad!(enc_conv6, gen_grad.enc_conv6);
-        log_grad!(enc_conv7, gen_grad.enc_conv7);
-        log_grad!(enc_conv8, gen_grad.enc_conv8);
-        log_grad!(dec_conv1, gen_grad.dec_conv1);
-        log_grad!(dec_conv2, gen_grad.dec_conv2);
-        log_grad!(dec_conv3, gen_grad.dec_conv3);
-        log_grad!(dec_conv4, gen_grad.dec_conv4);
-        log_grad!(dec_conv5, gen_grad.dec_conv5);
-        log_grad!(dec_conv6, gen_grad.dec_conv6);
-        log_grad!(dec_conv7, gen_grad.dec_conv7);
-        log_grad!(dec_conv8, gen_grad.dec_conv8);
+        log_grad!(enc, conv1, gen_grad.enc_conv1);
+        log_grad!(enc, conv2, gen_grad.enc_conv2);
+        log_grad!(enc, conv3, gen_grad.enc_conv3);
+        log_grad!(enc, conv4, gen_grad.enc_conv4);
+        log_grad!(enc, conv5, gen_grad.enc_conv5);
+        log_grad!(enc, conv6, gen_grad.enc_conv6);
+        log_grad!(enc, conv7, gen_grad.enc_conv7);
+        log_grad!(enc, conv8, gen_grad.enc_conv8);
+        log_grad!(dec, conv1, gen_grad.dec_conv1);
+        log_grad!(dec, conv2, gen_grad.dec_conv2);
+        log_grad!(dec, conv3, gen_grad.dec_conv3);
+        log_grad!(dec, conv4, gen_grad.dec_conv4);
+        log_grad!(dec, conv5, gen_grad.dec_conv5);
+        log_grad!(dec, conv6, gen_grad.dec_conv6);
+        log_grad!(dec, conv7, gen_grad.dec_conv7);
+        log_grad!(dec, conv8, gen_grad.dec_conv8);
 
     }
 }
