@@ -1,7 +1,7 @@
 use burn::{
     config::Config, module::Module, nn::{
         conv::{Conv2d, Conv2dConfig, ConvTranspose2d, ConvTranspose2dConfig}, BatchNorm, BatchNormConfig, Dropout, DropoutConfig, Initializer, LeakyRelu, LeakyReluConfig, PaddingConfig2d, Relu, Tanh
-    }, prelude::Backend, tensor::Tensor
+    }, optim::GradientsParams, prelude::Backend, tensor::{backend::AutodiffBackend, Tensor}
 };
 
 #[derive(Module, Debug)]
@@ -184,3 +184,51 @@ impl<B: Backend> Pix2PixGenerator<B> {
         self.tanh.forward(d8) // Tanh-Ausgabe im Bereich [-1, 1]
     }
 }
+
+pub struct Pix2PixGeneratorGradients<B: AutodiffBackend> {
+    pub enc_conv1: Option<Tensor<B::InnerBackend, 4>>,
+    pub enc_conv2: Option<Tensor<B::InnerBackend, 4>>,
+    pub enc_conv3: Option<Tensor<B::InnerBackend, 4>>,
+    pub enc_conv4: Option<Tensor<B::InnerBackend, 4>>,
+    pub enc_conv5: Option<Tensor<B::InnerBackend, 4>>,
+    pub enc_conv6: Option<Tensor<B::InnerBackend, 4>>,
+    pub enc_conv7: Option<Tensor<B::InnerBackend, 4>>,
+    pub enc_conv8: Option<Tensor<B::InnerBackend, 4>>,
+    pub dec_conv1: Option<Tensor<B::InnerBackend, 4>>,
+    pub dec_conv2: Option<Tensor<B::InnerBackend, 4>>,
+    pub dec_conv3: Option<Tensor<B::InnerBackend, 4>>,
+    pub dec_conv4: Option<Tensor<B::InnerBackend, 4>>,
+    pub dec_conv5: Option<Tensor<B::InnerBackend, 4>>,
+    pub dec_conv6: Option<Tensor<B::InnerBackend, 4>>,
+    pub dec_conv7: Option<Tensor<B::InnerBackend, 4>>,
+    pub dec_conv8: Option<Tensor<B::InnerBackend, 4>>,
+}
+
+impl<B: AutodiffBackend> Pix2PixGeneratorGradients<B> {
+    pub fn new(model: &Pix2PixGenerator<B>, grad: &GradientsParams) -> Self {
+        macro_rules! get_conv_grad {
+            ($conv:expr) => {
+                grad.get($conv.weight.id)
+            };
+        }
+        Self {
+            enc_conv1: get_conv_grad!(model.enc_conv1),
+            enc_conv2: get_conv_grad!(model.enc_conv2),
+            enc_conv3: get_conv_grad!(model.enc_conv3),
+            enc_conv4: get_conv_grad!(model.enc_conv4),
+            enc_conv5: get_conv_grad!(model.enc_conv5),
+            enc_conv6: get_conv_grad!(model.enc_conv6),
+            enc_conv7: get_conv_grad!(model.enc_conv7),
+            enc_conv8: get_conv_grad!(model.enc_conv8),
+            dec_conv1: get_conv_grad!(model.dec_conv_t1),
+            dec_conv2: get_conv_grad!(model.dec_conv_t2),
+            dec_conv3: get_conv_grad!(model.dec_conv_t3),
+            dec_conv4: get_conv_grad!(model.dec_conv_t4),
+            dec_conv5: get_conv_grad!(model.dec_conv_t5),
+            dec_conv6: get_conv_grad!(model.dec_conv_t6),
+            dec_conv7: get_conv_grad!(model.dec_conv_t7),
+            dec_conv8: get_conv_grad!(model.dec_conv_t8),
+        }
+    }
+}
+

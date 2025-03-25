@@ -1,7 +1,12 @@
 use std::path::PathBuf;
 
 use burn::{
-    config::{Config, ConfigError}, data::{dataloader::DataLoaderBuilder, dataset::Dataset}, module::{AutodiffModule, Module}, optim::{AdamConfig, GradientsParams, Optimizer}, record::{FileRecorder, RecorderError}, tensor::backend::AutodiffBackend
+    config::{Config, ConfigError},
+    data::{dataloader::DataLoaderBuilder, dataset::Dataset},
+    module::{AutodiffModule, Module},
+    optim::{AdamConfig, GradientsParams, Optimizer},
+    record::{FileRecorder, RecorderError},
+    tensor::backend::AutodiffBackend,
 };
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -11,11 +16,18 @@ use crate::{
     logging::SketchyGanLogger,
     sketchy_database::{
         sketchy_batcher::SketchyBatcher,
-        sketchy_dataset::{PhotoAugmentation, SketchAugmentation, SketchyClass, SketchyDataset, SketchyDatasetError},
+        sketchy_dataset::{
+            PhotoAugmentation, SketchAugmentation, SketchyClass, SketchyDataset,
+            SketchyDatasetError,
+        },
     },
 };
 
-use super::gan::{Pix2PixModel, Pix2PixModelConfig};
+use super::{
+    discriminator::Pix2PixDiscriminatorGradients,
+    gan::{Pix2PixModel, Pix2PixModelConfig},
+    generator::Pix2PixGeneratorGradients,
+};
 use thiserror::Error;
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -48,9 +60,9 @@ pub enum TrainDataConfig {
 pub struct TrainingConfig {
     pub optimizer_discriminator: AdamConfig,
     pub optimizer_generator: AdamConfig,
-    #[config(default = 100)]
+    #[config(default = 5000)]
     pub num_epochs: usize,
-    #[config(default = 4)]
+    #[config(default = 1)]
     pub batch_size: usize,
     #[config(default = 10)]
     pub num_workers: usize,
@@ -80,8 +92,6 @@ pub enum TrainingError {
     ModelWeightsDeserializationError(#[from] RecorderError),
 }
 
-
-
 pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
     artifact_dir: &str,
     config: TrainingConfig,
@@ -90,10 +100,8 @@ pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
     log: SketchyGanLogger,
     recorder: R,
 ) -> Result<Pix2PixModel<B>, TrainingError> {
-    
     create_artifact_dir(artifact_dir);
-    config
-        .save(format!("{artifact_dir}/training_config.json"))?;
+    config.save(format!("{artifact_dir}/training_config.json"))?;
 
     B::seed(config.seed);
 
@@ -102,18 +110,15 @@ pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
 
     let mut model = match model_provider {
         Pix2PixModelProvider::Config(pix_2_pix_model_config) => {
-            pix_2_pix_model_config
-                .save(format!("{artifact_dir}/model_config.json"))?;
+            pix_2_pix_model_config.save(format!("{artifact_dir}/model_config.json"))?;
             pix_2_pix_model_config.init::<B>(&device)
         }
         Pix2PixModelProvider::Checkpoint {
             config_path,
             checkpoint_path,
-        } => Pix2PixModelConfig::load(&config_path)?.init::<B>(&device).load_file(
-            &checkpoint_path,
-            &recorder,
-            &device,
-        )?,
+        } => Pix2PixModelConfig::load(&config_path)?
+            .init::<B>(&device)
+            .load_file(&checkpoint_path, &recorder, &device)?,
     };
     let (train, valid) = match config.train_data {
         TrainDataConfig::PhotoDirectoryPath {
@@ -130,7 +135,6 @@ pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
                 photo_augmentation,
                 sketch_augmentation,
             )?;
-
 
             if let Some(filter) = filter {
                 data = data.filter(|item| filter.contains(&item.sketch_class))
@@ -182,7 +186,7 @@ pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
 
         let training_bar = m.add(ProgressBar::new(train_size as u64));
         training_bar.set_style(sty.clone());
-        training_bar.set_message("Training:");
+        training_bar.set_message("Training Progress");
         // Implement our training loop.
         for (iteration, batch) in dataloader_train.iter().enumerate() {
             let photos = batch.photos.clone();
@@ -199,6 +203,15 @@ pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
 
             let grad_d_param = GradientsParams::from_grads(grad_d, &model.discriminator);
             let grad_g_param = GradientsParams::from_grads(grad_g, &model.generator);
+
+            log.log_discriminator_gradient(
+                Pix2PixDiscriminatorGradients::new(&model.discriminator, &grad_d_param),
+                iteration,
+            );
+            log.log_generator_gradient(
+                Pix2PixGeneratorGradients::new(&model.generator, &grad_g_param),
+                iteration,
+            );
 
             log.log_progress(photos, output, "training", iteration);
 

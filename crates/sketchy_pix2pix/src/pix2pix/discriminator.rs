@@ -1,6 +1,8 @@
 use burn::{
     nn::conv::{Conv2d, Conv2dConfig},
+    optim::GradientsParams,
     prelude::*,
+    tensor::backend::AutodiffBackend,
 };
 use nn::{
     BatchNorm, BatchNormConfig, Initializer, LeakyRelu, LeakyReluConfig, PaddingConfig2d, Sigmoid,
@@ -103,5 +105,33 @@ impl<B: Backend> Pix2PixDiscriminator<B> {
         let x = self.lrelu.forward(self.bn5.forward(self.conv5.forward(x)));
         let logits = self.conv_out.forward(x);
         self.sigmoid.forward(logits)
+    }
+}
+
+pub struct Pix2PixDiscriminatorGradients<B: AutodiffBackend> {
+    pub conv1: Option<Tensor<B::InnerBackend, 4>>,
+    pub conv2: Option<Tensor<B::InnerBackend, 4>>,
+    pub conv3: Option<Tensor<B::InnerBackend, 4>>,
+    pub conv4: Option<Tensor<B::InnerBackend, 4>>,
+    pub conv5: Option<Tensor<B::InnerBackend, 4>>,
+    pub conv_out: Option<Tensor<B::InnerBackend, 4>>,
+}
+
+impl<B: AutodiffBackend> Pix2PixDiscriminatorGradients<B> {
+    pub fn new(model: &Pix2PixDiscriminator<B>, grad: &GradientsParams) -> Self {
+        macro_rules! get_conv_grad {
+            ($conv:expr) => {
+                grad.get($conv.weight.id)
+            };
+        }
+
+        Self {
+            conv1: get_conv_grad!(model.conv1),
+            conv2: get_conv_grad!(model.conv2),
+            conv3: get_conv_grad!(model.conv3),
+            conv4: get_conv_grad!(model.conv4),
+            conv5: get_conv_grad!(model.conv5),
+            conv_out: get_conv_grad!(model.conv_out),
+        }
     }
 }

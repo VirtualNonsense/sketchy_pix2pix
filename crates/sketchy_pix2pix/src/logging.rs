@@ -1,18 +1,20 @@
-use std::usize;
-
 use burn::{
-    prelude::{Backend, Tensor}, tensor::{cast::ToElement, BasicOps, Int}
+    prelude::{Backend, Tensor},
+    tensor::{BasicOps, Int, backend::AutodiffBackend, cast::ToElement},
 };
 use rerun::{
-    AsComponents, RecordingStream,
-    external::ndarray::{self},
+    external::ndarray::{self}, AsComponents, RecordingStream,
 };
 
-use crate::pix2pix::gan::GanOutput;
+use crate::pix2pix::{
+    discriminator::Pix2PixDiscriminatorGradients, gan::GanOutput,
+    generator::Pix2PixGeneratorGradients,
+};
 
 pub struct SketchyGanLogger {
     stream: RecordingStream,
-    pub log_image_interval: usize,
+    pub log_image_result_interval: usize,
+    pub log_grad_interval: usize,
     pub image_grid_options: ImageGrindOptions,
 }
 
@@ -26,7 +28,8 @@ impl SketchyGanLogger {
     pub fn new(stream: RecordingStream) -> Self {
         Self {
             stream,
-            log_image_interval: 25,
+            log_image_result_interval: 25,
+            log_grad_interval: 100,
             image_grid_options: ImageGrindOptions::Auto,
         }
     }
@@ -44,17 +47,19 @@ impl SketchyGanLogger {
             .mean_dim(0)
             .squeeze::<1>(0);
         let loss_g = output.loss_generator.clone().mean_dim(0).squeeze::<1>(0);
-        if batch % self.log_image_interval == 0 {
+        if batch % self.log_image_result_interval == 0 {
             match LogAble::from_burn_4d_tensoru8(
                 convert_to_picture(output.real_sketch_output),
                 self.image_grid_options.clone(),
             ) {
                 Ok(c) => {
-                    let _ = self.stream.log(format!("{}/raw/real_result", base_path), &c);
+                    let _ = self
+                        .stream
+                        .log(format!("{}/raw/real_result", base_path), &c);
                 }
                 Err(e) => {
                     let _ = self.stream.log(
-                        format!("{}/raw/real_result",base_path),
+                        format!("{}/raw/real_result", base_path),
                         &rerun::TextLog::new(format!(
                             "Failed to convert input real_sketch_output due to {:?}",
                             e
@@ -68,11 +73,13 @@ impl SketchyGanLogger {
                 self.image_grid_options.clone(),
             ) {
                 Ok(c) => {
-                    let _ = self.stream.log(format!("{}/raw/fake_result", base_path), &c);
+                    let _ = self
+                        .stream
+                        .log(format!("{}/raw/fake_result", base_path), &c);
                 }
                 Err(e) => {
                     let _ = self.stream.log(
-                        format!("{}/raw/fake_result",base_path),
+                        format!("{}/raw/fake_result", base_path),
                         &rerun::TextLog::new(format!(
                             "Failed to convert input fake_sketch_output due to {:?}",
                             e
@@ -86,7 +93,10 @@ impl SketchyGanLogger {
                 convert_to_picture(photos),
                 self.image_grid_options.clone(),
             ) {
-                Ok(c) => match self.stream.log(format!("{}/images/input_images", base_path), &c) {
+                Ok(c) => match self
+                    .stream
+                    .log(format!("{}/images/input_images", base_path), &c)
+                {
                     Ok(_) => (),
                     _ => {}
                 },
@@ -106,7 +116,9 @@ impl SketchyGanLogger {
                 self.image_grid_options.clone(),
             ) {
                 Ok(c) => {
-                    let _ = self.stream.log(format!("{}/images/real_sketches",base_path), &c);
+                    let _ = self
+                        .stream
+                        .log(format!("{}/images/real_sketches", base_path), &c);
                 }
                 Err(e) => {
                     let _ = self.stream.log(
@@ -124,11 +136,13 @@ impl SketchyGanLogger {
                 self.image_grid_options.clone(),
             ) {
                 Ok(c) => {
-                    let _ = self.stream.log(format!("{}/images/fake_sketches", base_path), &c);
+                    let _ = self
+                        .stream
+                        .log(format!("{}/images/fake_sketches", base_path), &c);
                 }
                 Err(e) => {
                     let _ = self.stream.log(
-                        format!("{}/images/fake_sketches",base_path),
+                        format!("{}/images/fake_sketches", base_path),
                         &rerun::TextLog::new(format!(
                             "Failed to convert fake_sketches due to {:?}",
                             e
@@ -146,7 +160,7 @@ impl SketchyGanLogger {
             if let Ok(c) = loss {
                 for (i, val) in c.iter().enumerate() {
                     let _ = self.stream.log(
-                        format!("graphs/{}/loss/generator/component_{}", base_path, i),
+                        format!("{}/loss/generator/component_{}", base_path, i),
                         &rerun::Scalar::new(*val as f64),
                     );
                 }
@@ -158,7 +172,7 @@ impl SketchyGanLogger {
             if let Ok(c) = loss {
                 for (i, val) in c.iter().enumerate() {
                     let _ = self.stream.log(
-                        format!("graphs/{}/loss/discriminator/component_{}", base_path, i),
+                        format!("{}/loss/discriminator/component_{}", base_path, i),
                         &rerun::Scalar::new(*val as f64),
                     );
                 }
@@ -173,7 +187,77 @@ impl SketchyGanLogger {
             &rerun::Scalar::new(dis_loss),
         );
     }
+
+    pub fn log_discriminator_gradient<B: AutodiffBackend>(
+        &self,
+        disc_grad: Pix2PixDiscriminatorGradients<B>,
+        iteration: usize,
+    ) {
+        if iteration % self.log_grad_interval != 0 {
+            return;
+        }
+
+        macro_rules! log_grad {
+            ($name:ident, $grad_test:expr) => {
+                if let Some(grad) = $grad_test {
+                    if let Ok(comp) = LogAble::from_burn_tensorf32(grad.mean_dim(0), ["out_channel", "in_channel",  "height", "width"]) {
+                        let _ = self.stream.log(
+                            format!("gradient/discriminator/{}", stringify!($name)),
+                            &comp,
+                        );
+                    }
+                }
+            };
+        }
+        log_grad!(conv1, disc_grad.conv1);
+        log_grad!(conv2, disc_grad.conv2);
+        log_grad!(conv3, disc_grad.conv3);
+        log_grad!(conv4, disc_grad.conv4);
+        log_grad!(conv5, disc_grad.conv5);
+        log_grad!(conv_out, disc_grad.conv_out);
+    }
+
+    pub fn log_generator_gradient<B: AutodiffBackend>(
+        &self,
+        gen_grad: Pix2PixGeneratorGradients<B>,
+        iteration: usize,
+    ) {
+        if iteration % self.log_grad_interval != 0 {
+            return;
+        }
+
+
+        macro_rules! log_grad {
+            ($name:ident, $grad_test:expr) => {
+                if let Some(grad) = $grad_test {
+                    if let Ok(comp) = LogAble::from_burn_tensorf32(grad.mean_dim(0), ["out_channel", "in_channel",  "height", "width"]) {
+                        let _ = self
+                            .stream
+                            .log(format!("gradient/generator/{}", stringify!($name)), &comp);
+                    }
+                }
+            };
+        }
+        log_grad!(enc_conv1, gen_grad.enc_conv1);
+        log_grad!(enc_conv2, gen_grad.enc_conv2);
+        log_grad!(enc_conv3, gen_grad.enc_conv3);
+        log_grad!(enc_conv4, gen_grad.enc_conv4);
+        log_grad!(enc_conv5, gen_grad.enc_conv5);
+        log_grad!(enc_conv6, gen_grad.enc_conv6);
+        log_grad!(enc_conv7, gen_grad.enc_conv7);
+        log_grad!(enc_conv8, gen_grad.enc_conv8);
+        log_grad!(dec_conv1, gen_grad.dec_conv1);
+        log_grad!(dec_conv2, gen_grad.dec_conv2);
+        log_grad!(dec_conv3, gen_grad.dec_conv3);
+        log_grad!(dec_conv4, gen_grad.dec_conv4);
+        log_grad!(dec_conv5, gen_grad.dec_conv5);
+        log_grad!(dec_conv6, gen_grad.dec_conv6);
+        log_grad!(dec_conv7, gen_grad.dec_conv7);
+        log_grad!(dec_conv8, gen_grad.dec_conv8);
+
+    }
 }
+
 pub struct LogAble<K: ?Sized + AsComponents> {
     component: K,
 }
@@ -260,9 +344,10 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogAbleParsingError::RerunTensorParsingError(
-                                format!("{:?}", err),
-                            ));
+                            return Err(LogAbleParsingError::RerunTensorParsingError(format!(
+                                "{:?}",
+                                err
+                            )));
                         }
                         t.unwrap().with_dim_names(dim_label)
                     }
@@ -274,9 +359,10 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogAbleParsingError::RerunTensorParsingError(
-                                format!("{:?}", err),
-                            ));
+                            return Err(LogAbleParsingError::RerunTensorParsingError(format!(
+                                "{:?}",
+                                err
+                            )));
                         }
                         t.unwrap().with_dim_names(dim_label)
                     }
@@ -288,9 +374,10 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogAbleParsingError::RerunTensorParsingError(
-                                format!("{:?}", err),
-                            ));
+                            return Err(LogAbleParsingError::RerunTensorParsingError(format!(
+                                "{:?}",
+                                err
+                            )));
                         }
                         t.unwrap().with_dim_names(dim_label)
                     }
@@ -302,9 +389,10 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogAbleParsingError::RerunTensorParsingError(
-                                format!("{:?}", err),
-                            ));
+                            return Err(LogAbleParsingError::RerunTensorParsingError(format!(
+                                "{:?}",
+                                err
+                            )));
                         }
                         t.unwrap().with_dim_names(dim_label)
                     }
@@ -316,9 +404,10 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogAbleParsingError::RerunTensorParsingError(
-                                format!("{:?}", err),
-                            ));
+                            return Err(LogAbleParsingError::RerunTensorParsingError(format!(
+                                "{:?}",
+                                err
+                            )));
                         }
                         t.unwrap().with_dim_names(dim_label)
                     }
@@ -331,9 +420,10 @@ macro_rules! impl_from_burn_tensore {
                         });
                         let t = rerun::Tensor::try_from(nd);
                         if let Err(err) = t {
-                            return Err(LogAbleParsingError::RerunTensorParsingError(
-                                format!("{:?}", err),
-                            ));
+                            return Err(LogAbleParsingError::RerunTensorParsingError(format!(
+                                "{:?}",
+                                err
+                            )));
                         }
                         t.unwrap().with_dim_names(dim_label)
                     }
@@ -370,7 +460,7 @@ pub enum ImageGrindOptions {
 }
 
 impl ImageGrindOptions {
-    fn into_row_column(self, batch_size: usize) -> (usize, usize){
+    fn into_row_column(self, batch_size: usize) -> (usize, usize) {
         match self {
             ImageGrindOptions::Columns(c) => {
                 let r = batch_size as f32 / c as f32;
@@ -573,25 +663,24 @@ mod tests {
         assert!(log_container.is_ok());
     }
     #[test]
-    fn test_auto_batch_size_2(){
+    fn test_auto_batch_size_2() {
         let grid = ImageGrindOptions::Auto;
         let (rows, columns) = grid.into_row_column(2);
         assert_eq!(rows, 2);
         assert_eq!(columns, 1);
     }
     #[test]
-    fn test_auto_batch_size_3(){
+    fn test_auto_batch_size_3() {
         let grid = ImageGrindOptions::Auto;
         let (rows, columns) = grid.into_row_column(3);
         assert_eq!(rows, 2);
         assert_eq!(columns, 2);
     }
     #[test]
-    fn test_auto_batch_size_4(){
+    fn test_auto_batch_size_4() {
         let grid = ImageGrindOptions::Auto;
         let (rows, columns) = grid.into_row_column(4);
         assert_eq!(rows, 2);
         assert_eq!(columns, 2);
     }
-
 }
