@@ -6,7 +6,7 @@ use burn::{
     module::{AutodiffModule, Module},
     optim::{AdamConfig, GradientsParams, Optimizer},
     record::{FileRecorder, RecorderError},
-    tensor::backend::AutodiffBackend,
+    tensor::{backend::AutodiffBackend, cast::ToElement},
 };
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -193,11 +193,10 @@ pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
             let output = model.forward_training(batch);
             let loss_d = output
                 .loss_discriminator
-                .clone()
-                .mean_dim(0)
-                .squeeze::<1>(0);
-            let loss_g = output.loss_generator.clone().mean_dim(0).squeeze::<1>(0);
-
+                .clone();
+            let loss_g = output
+                .loss_generator
+                .clone();
             let grad_d = loss_d.clone().backward();
             let grad_g = loss_g.clone().backward();
 

@@ -55,9 +55,9 @@ pub struct GanOutput<B: Backend> {
     /// dim [N, 1, 16, 16]
     pub fake_sketch_output: Tensor<B, 4>,
     /// loss of discriminator
-    pub loss_discriminator: Tensor<B, 2>,
+    pub loss_discriminator: Tensor<B, 1>,
     /// loss of generator
-    pub loss_generator: Tensor<B, 2>,
+    pub loss_generator: Tensor<B, 1>,
 }
 
 impl<B: Backend> ItemLazy for GanOutput<B> {
@@ -102,49 +102,57 @@ impl<B: Backend> Pix2PixModel<B> {
         let real_result = self
             .discriminator
             .forward(item.sketches.clone().detach(), item.photos.clone().detach());
+        let real_result_simplified = real_result.clone().mean_dim(1).mean_dim(2).mean_dim(3).squeeze_dims::<1>(&[1,2,3]);
         let fake_result_for_discriminator = self
             .discriminator
             // IMPORTANT: detatch generated sketch from generator.
             .forward(
                 generated_sketches.clone().detach(),
                 item.photos.clone().detach(),
-            );
+            )
+            .mean_dim(1).mean_dim(2).mean_dim(3)
+            .squeeze_dims::<1>(&[1,2,3]);
         let fake_result_for_generator = self
             .discriminator
             // IMPORTANT the discriminator should not be included in autograd path.
             .clone()
             .no_grad()
             .forward(generated_sketches.clone(), item.photos.clone().detach());
-        let loss_d_real = self.mse_loss.forward(
-            real_result.clone(),
-            Tensor::ones_like(&real_result),
-            nn::loss::Reduction::Mean,
-        );
-        let loss_d_fake = self.mse_loss.forward(
-            fake_result_for_discriminator.clone(),
-            Tensor::zeros_like(&fake_result_for_discriminator),
-            nn::loss::Reduction::Mean,
+
+        let fake_result_for_generator_simplified = fake_result_for_generator.clone().mean_dim(1).mean_dim(2).mean_dim(3).squeeze_dims::<1>(&[1,2,3]);
+        let loss_d = self.bce_loss.forward(
+            Tensor::cat(
+                vec![real_result_simplified.clone(), fake_result_for_discriminator.clone()],
+                0,
+            ),
+            Tensor::cat(
+                vec![Tensor::ones(real_result_simplified.shape(), &real_result_simplified.device()),
+                     Tensor::zeros(fake_result_for_discriminator.shape(), &fake_result_for_discriminator.device())],
+                0,
+            ),
         );
 
+        // let loss_d_real = self.bce_loss.forward(
+        //     real_result_simplified.clone(),
+        //     Tensor::ones(real_result_simplified.shape(), &real_result_simplified.device()),
+        // );
+        // let loss_d_fake = self.bce_loss.forward(
+        //     fake_result_for_discriminator.clone(),
+        //     Tensor::zeros(fake_result_for_discriminator.shape(), &fake_result_for_discriminator.device()),
+        // );
+
         let loss_g_fake = self.mse_loss.forward(
-            fake_result_for_generator.clone(),
-            Tensor::ones_like(&fake_result_for_generator),
+            fake_result_for_generator_simplified.clone(),
+            Tensor::ones(fake_result_for_generator_simplified.shape(), &fake_result_for_generator_simplified.device()),
             nn::loss::Reduction::Mean,
         );
-        let gen_loss = Tensor::cat(vec![loss_g_fake.unsqueeze_dims(&[1, -1])], 0);
-        let dis_loss = Tensor::cat(
-            vec![
-                loss_d_real.unsqueeze_dims(&[1, -1]),
-                loss_d_fake.unsqueeze_dims(&[1, -1]),
-            ],
-            0,
-        );
+        let gen_loss = loss_g_fake;
         GanOutput {
             train_sketches: item.sketches,
             fake_sketches: generated_sketches,
             real_sketch_output: real_result,
             fake_sketch_output: fake_result_for_generator,
-            loss_discriminator: dis_loss,
+            loss_discriminator: loss_d,
             loss_generator: gen_loss,
         }
     }
@@ -159,8 +167,6 @@ impl<B: AutodiffBackend> TrainStep<SketchyBatch<B>, GanOutput<B>> for Pix2PixMod
             output
                 .loss_generator
                 .clone()
-                .mean_dim(0)
-                .squeeze::<1>(0)
                 .backward(),
             output,
         )
@@ -175,7 +181,7 @@ impl<B: Backend> ValidStep<SketchyBatch<B>, GanOutput<B>> for Pix2PixModel<B> {
 
 impl<B: Backend> Adaptor<LossInput<B>> for GanOutput<B> {
     fn adapt(&self) -> LossInput<B> {
-        let loss_mean = self.loss_discriminator.clone().mean_dim(0).squeeze(0);
+        let loss_mean = self.loss_discriminator.clone();
         LossInput::new(loss_mean)
     }
 }

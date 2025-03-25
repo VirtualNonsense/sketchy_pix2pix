@@ -3,7 +3,8 @@ use burn::{
     tensor::{BasicOps, Int, backend::AutodiffBackend, cast::ToElement},
 };
 use rerun::{
-    external::ndarray::{self}, AsComponents, RecordingStream,
+    AsComponents, RecordingStream,
+    external::ndarray::{self},
 };
 
 use crate::pix2pix::{
@@ -41,13 +42,11 @@ impl SketchyGanLogger {
         base_path: &str,
         batch: usize,
     ) {
-        let loss_d = output
-            .loss_discriminator
-            .clone()
-            .mean_dim(0)
-            .squeeze::<1>(0);
-        let loss_g = output.loss_generator.clone().mean_dim(0).squeeze::<1>(0);
-        if batch % self.log_image_result_interval == 0 {
+        let loss_d = output.loss_discriminator.clone();
+        let loss_g = output.loss_generator.clone();
+        let gen_loss = loss_g.into_scalar().to_f64();
+        let dis_loss = loss_d.into_scalar().to_f64();
+        if (batch % self.log_image_result_interval == 0) || gen_loss.is_nan() || dis_loss.is_nan() {
             match LogAble::from_burn_4d_tensoru8(
                 convert_to_picture(output.real_sketch_output),
                 self.image_grid_options.clone(),
@@ -152,40 +151,15 @@ impl SketchyGanLogger {
                 }
             }
         }
-        let gen_loss = loss_g.mean().into_scalar().to_f64();
-        let dis_loss = loss_d.mean().into_scalar().to_f64();
-        if output.loss_generator.shape().dims::<2>()[0] > 1 {
-            let loss = output.loss_generator.mean_dim(1).squeeze::<1>(1);
-            let loss = loss.to_data().to_vec::<f32>();
-            if let Ok(c) = loss {
-                for (i, val) in c.iter().enumerate() {
-                    let _ = self.stream.log(
-                        format!("{}/loss/generator/component_{}", base_path, i),
-                        &rerun::Scalar::new(*val as f64),
-                    );
-                }
-            }
-        }
-        if output.loss_discriminator.shape().dims::<2>()[0] > 1 {
-            let loss = output.loss_discriminator.mean_dim(1).squeeze::<1>(1);
-            let loss = loss.to_data().to_vec::<f32>();
-            if let Ok(c) = loss {
-                for (i, val) in c.iter().enumerate() {
-                    let _ = self.stream.log(
-                        format!("{}/loss/discriminator/component_{}", base_path, i),
-                        &rerun::Scalar::new(*val as f64),
-                    );
-                }
-            }
-        }
         let _ = self.stream.log(
-            format!("graphs/{}/loss/generator/mean", base_path),
+            format!("graphs/{}/loss/generator", base_path),
             &rerun::Scalar::new(gen_loss),
         );
         let _ = self.stream.log(
-            format!("graphs/{}/loss/discriminator/mean", base_path),
+            format!("graphs/{}/loss/discriminator", base_path),
             &rerun::Scalar::new(dis_loss),
         );
+
     }
 
     pub fn log_discriminator_gradient<B: AutodiffBackend>(
@@ -200,7 +174,10 @@ impl SketchyGanLogger {
         macro_rules! log_grad {
             ($name:ident, $grad_test:expr) => {
                 if let Some(grad) = $grad_test {
-                    if let Ok(comp) = LogAble::from_burn_tensorf32(grad.mean_dim(2).mean_dim(3), ["out_channel", "in_channel",  "row", "column"]) {
+                    if let Ok(comp) = LogAble::from_burn_tensorf32(
+                        grad.mean_dim(2).mean_dim(3),
+                        ["out_channel", "in_channel", "row", "column"],
+                    ) {
                         let _ = self.stream.log(
                             format!("gradient/discriminator/{}", stringify!($name)),
                             &comp,
@@ -226,14 +203,21 @@ impl SketchyGanLogger {
             return;
         }
 
-
         macro_rules! log_grad {
             ($block:ident, $name:ident, $grad_test:expr) => {
                 if let Some(grad) = $grad_test {
-                    if let Ok(comp) = LogAble::from_burn_tensorf32(grad.mean_dim(2).mean_dim(3), ["out_channel", "in_channel",  "row", "column"]) {
-                        let _ = self
-                            .stream
-                            .log(format!("gradient/generator/{}/{}", stringify!($block), stringify!($name)), &comp);
+                    if let Ok(comp) = LogAble::from_burn_tensorf32(
+                        grad.mean_dim(2).mean_dim(3),
+                        ["out_channel", "in_channel", "row", "column"],
+                    ) {
+                        let _ = self.stream.log(
+                            format!(
+                                "gradient/generator/{}/{}",
+                                stringify!($block),
+                                stringify!($name)
+                            ),
+                            &comp,
+                        );
                     }
                 }
             };
@@ -254,7 +238,6 @@ impl SketchyGanLogger {
         log_grad!(dec, conv6, gen_grad.dec_conv6);
         log_grad!(dec, conv7, gen_grad.dec_conv7);
         log_grad!(dec, conv8, gen_grad.dec_conv8);
-
     }
 }
 
