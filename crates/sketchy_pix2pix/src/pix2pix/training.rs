@@ -6,7 +6,7 @@ use burn::{
     module::{AutodiffModule, Module},
     optim::{AdamConfig, GradientsParams, Optimizer},
     record::{FileRecorder, RecorderError},
-    tensor::{backend::AutodiffBackend, cast::ToElement},
+    tensor::backend::AutodiffBackend,
 };
 
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
