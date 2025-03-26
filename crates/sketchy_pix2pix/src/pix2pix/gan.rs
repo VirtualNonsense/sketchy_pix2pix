@@ -1,7 +1,7 @@
 use burn::{
     nn::loss::{BinaryCrossEntropyLoss, BinaryCrossEntropyLossConfig, MseLoss},
     prelude::*,
-    tensor::{Tensor, Transaction, backend::AutodiffBackend},
+    tensor::{Tensor, Transaction, backend::AutodiffBackend, cast::ToElement},
     train::{
         TrainOutput, TrainStep, ValidStep,
         metric::{Adaptor, ItemLazy, LossInput},
@@ -97,12 +97,28 @@ impl<B: Backend> ItemLazy for GanOutput<B> {
 
 impl<B: Backend> Pix2PixModel<B> {
     pub fn forward_training(&self, item: SketchyBatch<B>) -> GanOutput<B> {
+        macro_rules! nan_check {
+            ($tensor:expr) => {{
+                let t = $tensor.clone();
+                if t.clone().mean().into_scalar().to_f32().is_nan() {
+                    panic!(concat!(stringify!($tensor), " contains nan {}"), t);
+                }
+            }};
+        }
         let generated_sketches = self.generator.forward(item.photos.clone().detach());
-
+        nan_check!(generated_sketches);
         let real_result = self
             .discriminator
             .forward(item.sketches.clone().detach(), item.photos.clone().detach());
-        let real_result_simplified = real_result.clone().mean_dim(1).mean_dim(2).mean_dim(3).squeeze_dims::<1>(&[1,2,3]);
+        let real_result_simplified = real_result
+            .clone()
+            .mean_dim(1)
+            .mean_dim(2)
+            .mean_dim(3)
+            .squeeze_dims::<1>(&[1, 2, 3]);
+
+        nan_check!(real_result);
+
         let fake_result_for_discriminator = self
             .discriminator
             // IMPORTANT: detatch generated sketch from generator.
@@ -110,8 +126,13 @@ impl<B: Backend> Pix2PixModel<B> {
                 generated_sketches.clone().detach(),
                 item.photos.clone().detach(),
             )
-            .mean_dim(1).mean_dim(2).mean_dim(3)
-            .squeeze_dims::<1>(&[1,2,3]);
+            .mean_dim(1)
+            .mean_dim(2)
+            .mean_dim(3)
+            .squeeze_dims::<1>(&[1, 2, 3]);
+
+        nan_check!(fake_result_for_discriminator);
+
         let fake_result_for_generator = self
             .discriminator
             // IMPORTANT the discriminator should not be included in autograd path.
@@ -119,41 +140,70 @@ impl<B: Backend> Pix2PixModel<B> {
             .no_grad()
             .forward(generated_sketches.clone(), item.photos.clone().detach());
 
-        let fake_result_for_generator_simplified = fake_result_for_generator.clone().mean_dim(1).mean_dim(2).mean_dim(3).squeeze_dims::<1>(&[1,2,3]);
-        let loss_d = self.bce_loss.forward(
-            Tensor::cat(
-                vec![real_result_simplified.clone(), fake_result_for_discriminator.clone()],
-                0,
-            ),
-            Tensor::cat(
-                vec![Tensor::ones(real_result_simplified.shape(), &real_result_simplified.device()),
-                     Tensor::zeros(fake_result_for_discriminator.shape(), &fake_result_for_discriminator.device())],
-                0,
+        nan_check!(fake_result_for_generator);
+
+        let loss_d_real = self.bce_loss.forward(
+            real_result_simplified.clone(),
+            Tensor::ones(
+                real_result_simplified.shape(),
+                &real_result_simplified.device(),
             ),
         );
+        {
+            let t = loss_d_real.clone();
+            if t.clone().mean().into_scalar().to_f32().is_nan() {
+                panic!(
+                    concat!(
+                        stringify!(loss_d_real),
+                        " contains nan {}. it was made from {}"
+                    ),
+                    t, real_result_simplified
+                );
+            }
+        };
 
-        // let loss_d_real = self.bce_loss.forward(
-        //     real_result_simplified.clone(),
-        //     Tensor::ones(real_result_simplified.shape(), &real_result_simplified.device()),
-        // );
-        // let loss_d_fake = self.bce_loss.forward(
-        //     fake_result_for_discriminator.clone(),
-        //     Tensor::zeros(fake_result_for_discriminator.shape(), &fake_result_for_discriminator.device()),
-        // );
+        let loss_d_fake = self.bce_loss.forward(
+            fake_result_for_discriminator.clone(),
+            Tensor::zeros(
+                fake_result_for_discriminator.shape(),
+                &fake_result_for_discriminator.device(),
+            ),
+        );
+        {
+            let t = loss_d_fake.clone();
+            if t.clone().mean().into_scalar().to_f32().is_nan() {
+                panic!(
+                    concat!(
+                        stringify!(loss_d_fake),
+                        " contains nan {}. it was made from :{}"
+                    ),
+                    t, fake_result_for_discriminator
+                );
+            }
+        };
 
-        let loss_g_fake = self.mse_loss.forward(
+        let fake_result_for_generator_simplified = fake_result_for_generator
+            .clone()
+            .mean_dim(1)
+            .mean_dim(2)
+            .mean_dim(3)
+            .squeeze_dims::<1>(&[1, 2, 3]);
+
+        let loss_g_fake = self.bce_loss.forward(
             fake_result_for_generator_simplified.clone(),
-            Tensor::ones(fake_result_for_generator_simplified.shape(), &fake_result_for_generator_simplified.device()),
-            nn::loss::Reduction::Mean,
+            Tensor::ones(
+                fake_result_for_generator_simplified.shape(),
+                &fake_result_for_generator_simplified.device(),
+            ),
         );
-        let gen_loss = loss_g_fake;
+
         GanOutput {
             train_sketches: item.sketches,
             fake_sketches: generated_sketches,
             real_sketch_output: real_result,
             fake_sketch_output: fake_result_for_generator,
-            loss_discriminator: loss_d,
-            loss_generator: gen_loss,
+            loss_discriminator: loss_d_fake + loss_d_real,
+            loss_generator: loss_g_fake,
         }
     }
 }
@@ -162,14 +212,7 @@ impl<B: AutodiffBackend> TrainStep<SketchyBatch<B>, GanOutput<B>> for Pix2PixMod
     fn step(&self, item: SketchyBatch<B>) -> TrainOutput<GanOutput<B>> {
         let output = self.forward_training(item);
 
-        TrainOutput::new(
-            self,
-            output
-                .loss_generator
-                .clone()
-                .backward(),
-            output,
-        )
+        TrainOutput::new(self, output.loss_generator.clone().backward(), output)
     }
 }
 
