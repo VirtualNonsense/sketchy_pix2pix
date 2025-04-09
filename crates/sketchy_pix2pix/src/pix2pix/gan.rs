@@ -28,6 +28,7 @@ impl Pix2PixModelConfig {
             generator: self.generator_config.init(device),
             mse_loss: MseLoss::new(),
             bce_loss: BinaryCrossEntropyLossConfig::new().init(device),
+            epsilon_clamp: 0.0001,
         }
     }
 }
@@ -38,6 +39,9 @@ pub struct Pix2PixModel<B: Backend> {
     pub generator: Pix2PixGenerator<B>,
     pub mse_loss: MseLoss,
     pub bce_loss: BinaryCrossEntropyLoss<B>,
+    /// clamp epsilon.
+    /// ensuring 
+    pub epsilon_clamp: f32,
 }
 
 #[derive(Debug)]
@@ -97,16 +101,8 @@ impl<B: Backend> ItemLazy for GanOutput<B> {
 
 impl<B: Backend> Pix2PixModel<B> {
     pub fn forward_training(&self, item: SketchyBatch<B>) -> GanOutput<B> {
-        macro_rules! nan_check {
-            ($tensor:expr) => {{
-                let t = $tensor.clone();
-                if t.clone().mean().into_scalar().to_f32().is_nan() {
-                    panic!(concat!(stringify!($tensor), " contains nan {}"), t);
-                }
-            }};
-        }
+        
         let generated_sketches = self.generator.forward(item.photos.clone().detach());
-        nan_check!(generated_sketches);
         let real_result = self
             .discriminator
             .forward(item.sketches.clone().detach(), item.photos.clone().detach());
@@ -116,8 +112,6 @@ impl<B: Backend> Pix2PixModel<B> {
             .mean_dim(2)
             .mean_dim(3)
             .squeeze_dims::<1>(&[1, 2, 3]);
-
-        nan_check!(real_result);
 
         let fake_result_for_discriminator = self
             .discriminator
@@ -131,8 +125,6 @@ impl<B: Backend> Pix2PixModel<B> {
             .mean_dim(3)
             .squeeze_dims::<1>(&[1, 2, 3]);
 
-        nan_check!(fake_result_for_discriminator);
-
         let fake_result_for_generator = self
             .discriminator
             // IMPORTANT the discriminator should not be included in autograd path.
@@ -140,47 +132,22 @@ impl<B: Backend> Pix2PixModel<B> {
             .no_grad()
             .forward(generated_sketches.clone(), item.photos.clone().detach());
 
-        nan_check!(fake_result_for_generator);
 
         let loss_d_real = self.bce_loss.forward(
-            real_result_simplified.clone(),
+            real_result_simplified.clone().clamp(self.epsilon_clamp, 1.0),
             Tensor::ones(
                 real_result_simplified.shape(),
                 &real_result_simplified.device(),
             ),
         );
-        {
-            let t = loss_d_real.clone();
-            if t.clone().mean().into_scalar().to_f32().is_nan() {
-                panic!(
-                    concat!(
-                        stringify!(loss_d_real),
-                        " contains nan {}. it was made from {}"
-                    ),
-                    t, real_result_simplified
-                );
-            }
-        };
 
         let loss_d_fake = self.bce_loss.forward(
-            fake_result_for_discriminator.clone(),
+            fake_result_for_discriminator.clone().clamp(self.epsilon_clamp, 1.0),
             Tensor::zeros(
                 fake_result_for_discriminator.shape(),
                 &fake_result_for_discriminator.device(),
             ),
         );
-        {
-            let t = loss_d_fake.clone();
-            if t.clone().mean().into_scalar().to_f32().is_nan() {
-                panic!(
-                    concat!(
-                        stringify!(loss_d_fake),
-                        " contains nan {}. it was made from :{}"
-                    ),
-                    t, fake_result_for_discriminator
-                );
-            }
-        };
 
         let fake_result_for_generator_simplified = fake_result_for_generator
             .clone()
@@ -190,7 +157,7 @@ impl<B: Backend> Pix2PixModel<B> {
             .squeeze_dims::<1>(&[1, 2, 3]);
 
         let loss_g_fake = self.bce_loss.forward(
-            fake_result_for_generator_simplified.clone(),
+            fake_result_for_generator_simplified.clone().clamp(self.epsilon_clamp, 1.0),
             Tensor::ones(
                 fake_result_for_generator_simplified.shape(),
                 &fake_result_for_generator_simplified.device(),
