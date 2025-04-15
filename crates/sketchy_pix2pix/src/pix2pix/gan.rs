@@ -8,8 +8,6 @@ use burn::{
     },
 };
 
-use crate::sketchy_database::sketchy_batcher::SketchyBatch;
-
 use super::{
     discriminator::{Pix2PixDescriminatorConfig, Pix2PixDiscriminator},
     generator::{Pix2PixGenerator, Pix2PixGeneratorConfig},
@@ -30,7 +28,6 @@ impl Pix2PixModelConfig {
             generator: self.generator_config.init(device),
             mse_loss: MseLoss::new(),
             bce_loss: BinaryCrossEntropyLossConfig::new().init(device),
-            epsilon_clamp: 0.0001,
         }
     }
 }
@@ -41,9 +38,6 @@ pub struct Pix2PixModel<B: Backend> {
     pub generator: Pix2PixGenerator<B>,
     pub mse_loss: MseLoss,
     pub bce_loss: BinaryCrossEntropyLoss<B>,
-    /// clamp epsilon.
-    /// ensuring 
-    pub epsilon_clamp: f32,
 }
 
 #[derive(Debug)]
