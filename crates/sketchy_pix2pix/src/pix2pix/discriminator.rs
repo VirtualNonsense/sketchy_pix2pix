@@ -26,7 +26,8 @@ pub struct Pix2PixDiscriminator<B: Backend> {
 
 #[derive(Config, Debug)]
 pub struct Pix2PixDescriminatorConfig {
-    #[config(default = "1")]
+    /// 1 Sketchchannel + 3 Image channels
+    #[config(default = "4")]
     in_channels: usize,
     #[config(default = "0.02")]
     init_stddev: f64,
@@ -39,7 +40,7 @@ impl Pix2PixDescriminatorConfig {
             std: self.init_stddev,
         };
         // first Conv: input channel = in_channels*2 (input and output will be concatinated -> their channels will be stacked), Filter = 64
-        let conv1 = Conv2dConfig::new([self.in_channels * 2, 64], [4, 4])
+        let conv1 = Conv2dConfig::new([self.in_channels, 64], [4, 4])
             .with_stride([2, 2])
             .with_padding(PaddingConfig2d::Explicit(1, 1)) // "same" Padding
             .with_initializer(init.clone())
