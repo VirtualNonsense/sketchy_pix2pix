@@ -21,9 +21,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let device = burn::backend::wgpu::WgpuDevice::default();
     let artifact_dir = "./tmp";
-
+    let stream =rerun::RecordingStreamBuilder::new("train sketchy gan").spawn()?;
     let rec =
-        SketchyGanLogger::new(rerun::RecordingStreamBuilder::new("train sketchy gan").spawn()?);
+        SketchyGanLogger::new(stream.clone());
+
+    rerun::Logger::new(stream) // recording streams are ref-counted
+        .with_path_prefix("logs")
+        .with_filter(rerun::default_log_filter())
+        .init()?;
 
     let base_path = PathBuf::from_str("./data/sketchydb_256x256/256x256")?;
 

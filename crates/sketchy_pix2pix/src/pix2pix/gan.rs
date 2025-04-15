@@ -14,6 +14,8 @@ use super::{
     discriminator::{Pix2PixDescriminatorConfig, Pix2PixDiscriminator},
     generator::{Pix2PixGenerator, Pix2PixGeneratorConfig},
 };
+use crate::sketchy_database::sketchy_batcher::SketchyBatch;
+use rerun::external::log;
 
 #[derive(Config, Debug)]
 pub struct Pix2PixModelConfig {
@@ -101,8 +103,21 @@ impl<B: Backend> ItemLazy for GanOutput<B> {
 
 impl<B: Backend> Pix2PixModel<B> {
     pub fn forward_training(&self, item: SketchyBatch<B>) -> GanOutput<B> {
-        
+        macro_rules! nan_check {
+            ($tensor:expr) => {{
+
+                log::debug!(target: "/logs/gan/nancheck", "{}", stringify!($tensor));
+                let t = $tensor.clone();
+                if t.clone().mean().into_scalar().to_f32().is_nan() {
+                    let msg = format!(concat!(stringify!($tensor), " contains nan {}"), t);
+                    log::error!("{}", msg.clone());
+                    panic!("{}", msg);
+                }
+            }};
+        }
+        log::debug!(target: "/logs/gan/", "start forward training");
         let generated_sketches = self.generator.forward(item.photos.clone().detach());
+        nan_check!(generated_sketches);
         let real_result = self
             .discriminator
             .forward(item.sketches.clone().detach(), item.photos.clone().detach());
@@ -112,6 +127,8 @@ impl<B: Backend> Pix2PixModel<B> {
             .mean_dim(2)
             .mean_dim(3)
             .squeeze_dims::<1>(&[1, 2, 3]);
+
+        nan_check!(real_result);
 
         let fake_result_for_discriminator = self
             .discriminator
@@ -125,6 +142,8 @@ impl<B: Backend> Pix2PixModel<B> {
             .mean_dim(3)
             .squeeze_dims::<1>(&[1, 2, 3]);
 
+        nan_check!(fake_result_for_discriminator);
+
         let fake_result_for_generator = self
             .discriminator
             // IMPORTANT the discriminator should not be included in autograd path.
@@ -132,22 +151,54 @@ impl<B: Backend> Pix2PixModel<B> {
             .no_grad()
             .forward(generated_sketches.clone(), item.photos.clone().detach());
 
-
+        nan_check!(fake_result_for_generator);
+        let ones = Tensor::ones(
+            real_result_simplified.shape(),
+            &real_result_simplified.device(),
+        );
         let loss_d_real = self.bce_loss.forward(
-            real_result_simplified.clone().clamp(self.epsilon_clamp, 1.0),
-            Tensor::ones(
-                real_result_simplified.shape(),
-                &real_result_simplified.device(),
-            ),
+            real_result_simplified.clone(),
+            ones.clone(),
         );
 
-        let loss_d_fake = self.bce_loss.forward(
-            fake_result_for_discriminator.clone().clamp(self.epsilon_clamp, 1.0),
-            Tensor::zeros(
-                fake_result_for_discriminator.shape(),
-                &fake_result_for_discriminator.device(),
-            ),
+        {
+            log::debug!(target:"/logs/gan/nancheck","{}",stringify!((loss_d_real.clone())));
+            let t = (loss_d_real.clone()).clone();
+            if t.clone().mean().into_scalar().to_f32().is_nan() {
+                let msg = format!(
+                    concat!(
+                        stringify!(loss_d_real),
+                        " contains nan {}. it was made from {} and {} with bce loss"
+                    ),
+                    t, real_result_simplified, ones
+                );
+                log::error!("{}", msg.clone());
+                panic!("{}", msg);
+            }
+        };
+        let zeros = Tensor::zeros(
+            fake_result_for_discriminator.shape(),
+            &fake_result_for_discriminator.device(),
         );
+        let loss_d_fake = self.bce_loss.forward(
+            fake_result_for_discriminator.clone(),
+            zeros.clone(),
+        );
+        {
+            log::debug!(target:"/logs/gan/nancheck","{}",stringify!(loss_d_fake));
+            let t = loss_d_fake.clone();
+            if t.clone().mean().into_scalar().to_f32().is_nan() {
+                let msg = format!(
+                    concat!(
+                        stringify!(loss_d_fake),
+                        " contains nan {}. it was made from :{} and {} with bce loss"
+                    ),
+                    t, fake_result_for_discriminator, zeros
+                );
+                log::error!("{}", msg.clone());
+                panic!("{}", msg);
+            }
+        };
 
         let fake_result_for_generator_simplified = fake_result_for_generator
             .clone()
@@ -157,13 +208,14 @@ impl<B: Backend> Pix2PixModel<B> {
             .squeeze_dims::<1>(&[1, 2, 3]);
 
         let loss_g_fake = self.bce_loss.forward(
-            fake_result_for_generator_simplified.clone().clamp(self.epsilon_clamp, 1.0),
+            fake_result_for_generator_simplified.clone(),
             Tensor::ones(
                 fake_result_for_generator_simplified.shape(),
                 &fake_result_for_generator_simplified.device(),
             ),
         );
 
+        log::debug!(target: "/logs/gan/", "end forward training");
         GanOutput {
             train_sketches: item.sketches,
             fake_sketches: generated_sketches,
