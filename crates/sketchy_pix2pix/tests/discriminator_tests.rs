@@ -30,27 +30,32 @@ mod discriminator {
 
         let device = burn::backend::wgpu::WgpuDevice::default();
 
-        let generator: Pix2PixDiscriminator<MyBackend> =
+        let discriminator: Pix2PixDiscriminator<MyBackend> =
         Pix2PixDescriminatorConfig::new().init(&device);
 
-        let batcher: SketchyBatcher<MyBackend> = SketchyBatcher::new(device);
+        let batcher: SketchyBatcher = SketchyBatcher::new();
 
         let items = vec![
             SketchyItem{
                 sketch_class: SketchyClass::Airplane,
-                photo: PathBuf::from_str("./data/sketchydb_256x256/256x256/photo/tx_000000000000/airplane/n02691156_58.jpg").unwrap(),
-                sketch: PathBuf::from_str("./data/sketchydb_256x256/256x256/sketch/tx_000000000000/airplane/n02691156_58-1.png").unwrap(),
+                photo: PathBuf::from_str("../../data/sketchydb_256x256/256x256/photo/tx_000000000000/airplane/n02691156_58.jpg").unwrap(),
+                sketch: PathBuf::from_str("../../data/sketchydb_256x256/256x256/sketch/tx_000000000000/airplane/n02691156_58-1.png").unwrap(),
             }, 
             SketchyItem{
                 sketch_class: SketchyClass::Airplane,
-                photo: PathBuf::from_str("./data/sketchydb_256x256/256x256/photo/tx_000000000000/airplane/n02691156_58.jpg").unwrap(),
-                sketch: PathBuf::from_str("./data/sketchydb_256x256/256x256/sketch/tx_000000000000/airplane/n02691156_58-2.png").unwrap(),
+                photo: PathBuf::from_str("../../data/sketchydb_256x256/256x256/photo/tx_000000000000/airplane/n02691156_58.jpg").unwrap(),
+                sketch: PathBuf::from_str("../../data/sketchydb_256x256/256x256/sketch/tx_000000000000/airplane/n02691156_58-2.png").unwrap(),
             }
         ];
 
-        let b = batcher.batch(items);
+        for item in &items{
+            assert!(item.photo.exists(), "{:?} does not exist", std::env::current_dir().unwrap().join(&item.photo));
+            assert!(item.sketch.exists(), "{:?} does not exist", std::env::current_dir().unwrap().join(&item.sketch));
+        }
 
-        let result = generator.forward(b.sketches.clone(), b.sketches.clone());
+        let b = batcher.batch(items, &device);
+
+        let result = discriminator.forward(b.sketches.clone(), b.photos.clone());
         
         assert_eq!(Shape::new([2, 1, 14, 14]), result.shape());
 

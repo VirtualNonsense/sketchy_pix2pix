@@ -8,9 +8,7 @@ name = "train_pix2pix"
 path = "src/bin/pix2pix_training.rs"
 
 [dependencies]
-bincode = "=2.0.0-rc.3"
-bincode_derive = "=2.0.0-rc.3"
-burn = { version = "0.16.0", features = ["wgpu", "dataset", "train"] }
+burn = { git = "https://github.com/tracel-ai/burn", branch = "main", default-features = false, features = ["std", "wgpu", "dataset", "train"] }
 image = "0.25"
 indicatif = "0.17"
 log = "0.4"

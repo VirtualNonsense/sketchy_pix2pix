@@ -105,8 +105,8 @@ pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
 
     B::seed(config.seed);
 
-    let batcher_train = SketchyBatcher::<B>::new(device.clone());
-    let batcher_valid = SketchyBatcher::<B::InnerBackend>::new(device.clone());
+    let batcher_train = SketchyBatcher::new();
+    let batcher_valid = SketchyBatcher::new();
 
     let mut model = match model_provider {
         Pix2PixModelProvider::Config(pix_2_pix_model_config) => {

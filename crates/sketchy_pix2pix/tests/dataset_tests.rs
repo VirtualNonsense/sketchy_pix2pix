@@ -10,9 +10,9 @@ mod end_to_end_tests {
     /// tests if the serialization / deserialization is as good as the loading function
     #[test]
     fn test_read_all_serialize_deserialize_compare() {
-        let photo_path = Path::new("./data/sketchydb_256x256/256x256/photo/");
+        let photo_path = Path::new("../../data/sketchydb_256x256/256x256/photo/");
 
-        let sketch_path = Path::new("./data/sketchydb_256x256/256x256/sketch/");
+        let sketch_path = Path::new("../../data/sketchydb_256x256/256x256/sketch/");
         let serialization_path =
             Path::new("./tests/test_read_all_serialize_deserialize_compare.ron");
         let r = SketchyDataset::new(
@@ -33,9 +33,9 @@ mod end_to_end_tests {
 
     #[test]
     fn load_photos() {
-        let photo_path = Path::new("./data/sketchydb_256x256/256x256/photo/");
+        let photo_path = Path::new("../../data/sketchydb_256x256/256x256/photo/");
 
-        let sketch_path = Path::new("./data/sketchydb_256x256/256x256/sketch/");
+        let sketch_path = Path::new("../../data/sketchydb_256x256/256x256/sketch/");
         let r = SketchyDataset::new(
             photo_path,
             sketch_path,
@@ -51,9 +51,9 @@ mod end_to_end_tests {
 
     #[test]
     fn load_sketches() {
-        let photo_path = Path::new("./data/sketchydb_256x256/256x256/photo/");
+        let photo_path = Path::new("../../data/sketchydb_256x256/256x256/photo/");
 
-        let sketch_path = Path::new("./data/sketchydb_256x256/256x256/sketch/");
+        let sketch_path = Path::new("../../data/sketchydb_256x256/256x256/sketch/");
         let r = SketchyDataset::new(
             photo_path,
             sketch_path,

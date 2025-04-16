@@ -8,18 +8,17 @@ pub struct SketchyBatch<B: Backend> {
 }
 
 #[derive(Clone, Debug)]
-pub struct SketchyBatcher<B: Backend> {
-    device: B::Device,
+pub struct SketchyBatcher {
 }
 
-impl<B: Backend> SketchyBatcher<B> {
-    pub fn new(device: B::Device) -> Self {
-        Self { device }
+impl SketchyBatcher {
+    pub fn new() -> Self {
+        Self {  }
     }
 }
 
-impl<B: Backend> Batcher<SketchyItem, SketchyBatch<B>> for SketchyBatcher<B> {
-    fn batch(&self, items: Vec<SketchyItem>) -> SketchyBatch<B> {
+impl<B: Backend> Batcher<B, SketchyItem, SketchyBatch<B>> for SketchyBatcher {
+    fn batch(&self, items: Vec<SketchyItem>, device: &B::Device) -> SketchyBatch<B> {
         let (photos, sketches) = items
             .iter()
             .map(|item| (item.load_photo(), item.load_sketch()))
@@ -30,12 +29,12 @@ impl<B: Backend> Batcher<SketchyItem, SketchyBatch<B>> for SketchyBatcher<B> {
                     ok_tuple.1.expect("failed to extract sketch"),
                 )
             }).fold((vec![], vec![]), |(mut photos, mut sketches), tuple: (burn::prelude::TensorData, burn::prelude::TensorData)| {
-                photos.push(Tensor::<B, 4>::from_data(tuple.0, &self.device).permute([0, 3, 1, 2]));
-                sketches.push(Tensor::<B, 4>::from_data(tuple.1, &self.device).permute([0, 3, 1, 2]));
+                photos.push(Tensor::<B, 4>::from_data(tuple.0, &device).permute([0, 3, 1, 2]));
+                sketches.push(Tensor::<B, 4>::from_data(tuple.1, &device).permute([0, 3, 1, 2]));
                 (photos, sketches)
             });
-        let mut photos = Tensor::cat(photos, 0).to_device(&self.device);
-        let mut sketches = Tensor::cat(sketches, 0).to_device(&self.device);
+        let mut photos = Tensor::cat(photos, 0).to_device(&device);
+        let mut sketches = Tensor::cat(sketches, 0).to_device(&device);
         // normalize [-1, 1]
         photos = (photos - 127.5) / 127.5;
         sketches = (sketches - 127.5) / 127.5;
