@@ -1,4 +1,6 @@
-use std::{path::PathBuf, str::FromStr};
+use std::{path::{Path, PathBuf}, str::FromStr};
+
+use rerun::{RecordingStreamBuilder, Logger};
 
 use burn::{
     backend::{Autodiff, Wgpu},
@@ -15,17 +17,35 @@ use sketchy_pix2pix::{
     }, sketchy_database::sketchy_dataset::SketchyClass,
 };
 
+
+fn create_artifact_dir(artifact_dir: &Path) -> std::io::Result<()> {
+    // Remove existing artifacts before to get an accurate learner summary
+    std::fs::remove_dir_all(artifact_dir)?;
+    std::fs::create_dir_all(artifact_dir)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     type MyBackend = Wgpu<f32, i32>;
     type MyAutodiffBackend = Autodiff<MyBackend>;
 
     let device = burn::backend::wgpu::WgpuDevice::default();
-    let artifact_dir = "./tmp";
-    let stream =rerun::RecordingStreamBuilder::new("train sketchy gan").spawn()?;
+
+    
+    let artifact_dir: PathBuf =  std::env::current_dir().unwrap().join("tmp");
+    println!("reseting artifact dir: {:?}", &artifact_dir);
+    create_artifact_dir(&artifact_dir)?;
+
+    let record_path = artifact_dir.join("training.rrd");
+    println!("saving record to: {:?}", &record_path);
+    
+    let stream = RecordingStreamBuilder::new("train_sketchy_gan")
+        .save(&record_path).expect("Rerun must work for my logging to function");
+
+    assert!(record_path.exists(), "failed to create: {record_path:?}");
     let rec =
         SketchyGanLogger::new(stream.clone());
 
-    rerun::Logger::new(stream) // recording streams are ref-counted
+    Logger::new(stream) // recording streams are ref-counted
         .with_path_prefix("logs")
         .with_filter(rerun::default_log_filter())
         .init()?;

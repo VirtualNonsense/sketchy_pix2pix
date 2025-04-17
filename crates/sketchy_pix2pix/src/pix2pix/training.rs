@@ -75,11 +75,6 @@ pub struct TrainingConfig {
     pub train_data: TrainDataConfig,
 }
 
-fn create_artifact_dir(artifact_dir: &str) {
-    // Remove existing artifacts before to get an accurate learner summary
-    std::fs::remove_dir_all(artifact_dir).ok();
-    std::fs::create_dir_all(artifact_dir).ok();
-}
 #[derive(Debug, Error)]
 pub enum TrainingError {
     #[error("IO error: {0}")]
@@ -93,15 +88,15 @@ pub enum TrainingError {
 }
 
 pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
-    artifact_dir: &str,
+    artifact_dir: impl Into<PathBuf>,
     config: TrainingConfig,
     model_provider: Pix2PixModelProvider,
     device: B::Device,
     log: SketchyGanLogger,
     recorder: R,
 ) -> Result<Pix2PixModel<B>, TrainingError> {
-    create_artifact_dir(artifact_dir);
-    config.save(format!("{artifact_dir}/training_config.json"))?;
+    let artifact_dir: PathBuf = artifact_dir.into();
+    config.save(&artifact_dir.join("training_config.json"))?;
 
     B::seed(config.seed);
 
@@ -110,7 +105,7 @@ pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
 
     let mut model = match model_provider {
         Pix2PixModelProvider::Config(pix_2_pix_model_config) => {
-            pix_2_pix_model_config.save(format!("{artifact_dir}/model_config.json"))?;
+            pix_2_pix_model_config.save(&artifact_dir.join("model_config.json"))?;
             pix_2_pix_model_config.init::<B>(&device)
         }
         Pix2PixModelProvider::Checkpoint {
@@ -228,10 +223,7 @@ pub fn train_gan<B: AutodiffBackend, R: FileRecorder<B>>(
         }
         m.remove(&training_bar);
         let _save_result = model.clone().save_file(
-            format!(
-                "{}/checkpoints/model_{:03}",
-                &artifact_dir,
-                epoch % checkpoint_rotate
+                &artifact_dir.join(format!("checkpoints/model_{:03}",epoch % checkpoint_rotate)
             ),
             &recorder,
         );
