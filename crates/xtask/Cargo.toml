@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-anyhow = "1.0"
-clap = { version = "4.5.31", features = ["derive"] }
-indicatif = "0.17"
-reqwest = { version = "0.11", features = ["blocking", "stream"] }
-sevenz-rust2 = "0.12.0"
+anyhow = "1.0.98"
+clap = { version = "4.5.37", features = ["derive"] }
+indicatif = "0.17.11"
+reqwest = { version = "0.12.15", features = ["blocking", "stream"] }
+sevenz-rust2 = "0.13.1"
